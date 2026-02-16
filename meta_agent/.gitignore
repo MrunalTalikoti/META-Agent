@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+venv/
+env/
+*.egg-info/
+
+# Environment
+.env
+*.env.local
+
+# Database
+*.sqlite3
+*.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Storage
+storage/outputs/*
+!storage/outputs/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
