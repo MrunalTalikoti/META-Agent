@@ -6,7 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import init_db, check_db_connection
 from app.utils.logger import logger
-
+from app.api import auth, projects
+from app.api import auth, projects, agents
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -43,6 +44,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register routes
+app.include_router(auth.router, prefix="/api/auth", tags=["Auth"])
+app.include_router(projects.router, prefix="/api/projects", tags=["Projects"])
+app.include_router(agents.router, prefix="/api/agents", tags=["Agents"])
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/", tags=["Root"])
