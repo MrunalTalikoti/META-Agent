@@ -9,11 +9,22 @@ from app.core.task_decomposer import TaskDecomposer, DecomposedTask
 from app.models.database import Task, TaskStatus, AgentType, Project
 from app.utils.logger import logger
 
+from app.agents.base_agent import BaseAgent, AgentResult
+from app.agents.code_generator import CodeGeneratorAgent
+from app.agents.api_designer import APIDesignerAgent
+from app.agents.database_schema import DatabaseSchemaAgent
+from app.agents.testing_agent import TestingAgent
+from app.agents.documentation_agent import DocumentationAgent
+
 
 # ── Agent Registry ────────────────────────────────────────────────────────────
 # Add new agents here as you build them (Day 4+)
 AGENT_REGISTRY: dict[str, BaseAgent] = {
     "code_generator": CodeGeneratorAgent(),
+    "api_designer": APIDesignerAgent(),
+    "database_schema": DatabaseSchemaAgent(),
+    "testing_agent": TestingAgent(),
+    "documentation_agent": DocumentationAgent(),
 }
 
 

@@ -6,6 +6,7 @@ from typing import Any, Optional, List, Dict
 
 import openai
 import anthropic
+from anthropic import AsyncAnthropic
 
 from app.core.config import settings
 from app.utils.logger import logger
@@ -167,7 +168,7 @@ class OpenAIProvider(LLMProvider):
 
 class AnthropicProvider(LLMProvider):
     def __init__(self):
-        self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self.client = AsyncAnthropic(api_key=settings.anthropic_api_key)
         self.model = "claude-3-5-sonnet-20241022"
 
     async def generate(
@@ -181,7 +182,21 @@ class AnthropicProvider(LLMProvider):
             (m["content"] for m in messages if m["role"] == "system"),
             "You are a helpful AI assistant."
         )
-        user_messages = [m for m in messages if m["role"] != "system"]
+        user_messages = []
+
+        for m in messages:
+            if m["role"] == "system":
+                continue
+
+            user_messages.append({
+                "role": m["role"],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": m["content"]
+                    }
+                ]
+            })
 
         response = await self.client.messages.create(
             model=self.model,
