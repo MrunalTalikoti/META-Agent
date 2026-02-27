@@ -2,12 +2,13 @@ import asyncio
 import json
 import time
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Optional, List, Dict
+
 import openai
 import anthropic
+
 from app.core.config import settings
 from app.utils.logger import logger
-from typing import Any, Optional, List, Dict
 
 
 # ── Response Schema ───────────────────────────────────────────────────────────
@@ -109,7 +110,7 @@ This function validates input, processes the request, and returns a structured d
         "dependencies": [],
         "inputs": {}
     }
-    ]'''
+]'''
         else:
             # For agent execution, pick response based on content
             last_message = messages[-1].get("content", "").lower()
@@ -131,80 +132,84 @@ This function validates input, processes the request, and returns a structured d
             model="mock",
             provider="mock",
         )
+
+
 # ── OpenAI Provider ───────────────────────────────────────────────────────────
 
-
 class OpenAIProvider(LLMProvider):
-    def init(self):
-
+    def __init__(self):
         self.client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
         self.model = "gpt-4-turbo-preview"
-        async def generate(
-            self,
-            messages: list[dict],
-            temperature: float = 0.7,
-            max_tokens: int = 2000,
-        ) -> LLMResponse:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
 
-            return LLMResponse(
-                content=response.choices[0].message.content,
-                prompt_tokens=response.usage.prompt_tokens,
-                completion_tokens=response.usage.completion_tokens,
-                model=self.model,
-                provider="openai",
-            )
-        
+    async def generate(
+        self,
+        messages: List[Dict],
+        temperature: float = 0.7,
+        max_tokens: int = 2000,
+    ) -> LLMResponse:
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+        return LLMResponse(
+            content=response.choices[0].message.content,
+            prompt_tokens=response.usage.prompt_tokens,
+            completion_tokens=response.usage.completion_tokens,
+            model=self.model,
+            provider="openai",
+        )
+
+
 # ── Anthropic Provider ────────────────────────────────────────────────────────
 
 class AnthropicProvider(LLMProvider):
-    def init(self):
-
+    def __init__(self):
         self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         self.model = "claude-3-5-sonnet-20241022"
-        async def generate(
-            self,
-            messages: list[dict],
-            temperature: float = 0.7,
-            max_tokens: int = 2000,
-        ) -> LLMResponse:
-            # Split system message from user messages (Anthropic API requires this)
-            system_msg = next(
-                (m["content"] for m in messages if m["role"] == "system"),
-                "You are a helpful AI assistant."
-            )
-            user_messages = [m for m in messages if m["role"] != "system"]
 
-            response = await self.client.messages.create(
-                model=self.model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system_msg,
-                messages=user_messages,
-            )
+    async def generate(
+        self,
+        messages: List[Dict],
+        temperature: float = 0.7,
+        max_tokens: int = 2000,
+    ) -> LLMResponse:
+        # Split system message from user messages (Anthropic API requires this)
+        system_msg = next(
+            (m["content"] for m in messages if m["role"] == "system"),
+            "You are a helpful AI assistant."
+        )
+        user_messages = [m for m in messages if m["role"] != "system"]
 
-            return LLMResponse(
-                content=response.content[0].text,
-                prompt_tokens=response.usage.input_tokens,
-                completion_tokens=response.usage.output_tokens,
-                model=self.model,
-                provider="anthropic",
-            )
-        
+        response = await self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=system_msg,
+            messages=user_messages,
+        )
+
+        return LLMResponse(
+            content=response.content[0].text,
+            prompt_tokens=response.usage.input_tokens,
+            completion_tokens=response.usage.output_tokens,
+            model=self.model,
+            provider="anthropic",
+        )
+
+
 # ── Factory ───────────────────────────────────────────────────────────────────
 
 class LLMService:
     """
     Use this everywhere in the codebase. Never instantiate providers directly.
+    
     Auto-selects provider:
-    - If ANTHROPIC_API_KEY set → AnthropicProvider
-    - If OPENAI_API_KEY set → OpenAIProvider  
-    - Otherwise → MockProvider (free, for development)
+      - If ANTHROPIC_API_KEY set → AnthropicProvider
+      - If OPENAI_API_KEY set → OpenAIProvider  
+      - Otherwise → MockProvider (free, for development)
     """
 
     def __init__(self, force_mock: bool = False):
@@ -223,7 +228,7 @@ class LLMService:
 
     async def generate(
         self,
-        messages: list[dict],
+        messages: List[Dict],
         temperature: float = 0.7,
         max_tokens: int = 2000,
     ) -> LLMResponse:
