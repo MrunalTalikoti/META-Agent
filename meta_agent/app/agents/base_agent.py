@@ -11,6 +11,7 @@ from app.models.database import AgentExecution, Task, TaskStatus
 from app.services.llm_service import LLMService, LLMResponse
 from app.core.cache import CacheService
 from app.utils.logger import logger
+from app.utils.cost_monitor import cost_monitor
 
 
 class AgentResult:
@@ -166,6 +167,8 @@ class BaseAgent(ABC):
                     execution_time_ms=int(time.time() * 1000) - start_ms,
                     error=error_msg,
                 )
+            cost_usd = llm_response.estimated_cost_usd()
+            cost_monitor.track(cost_usd)
 
         # ── Parse output ─────────────────────────────────────────────────────
         try:

@@ -10,6 +10,7 @@ from anthropic import AsyncAnthropic
 
 from app.core.config import settings
 from app.utils.logger import logger
+from app.utils.retry import async_retry
 
 
 # ── Response Schema ───────────────────────────────────────────────────────────
@@ -34,6 +35,7 @@ class LLMResponse:
         """Rough cost in USD. Stored as microdollars in DB."""
         rates = {
             "gpt-4-turbo-preview": {"in": 0.01, "out": 0.03},
+            "gpt-4o": {"in": 0.0, "out": 0.0}, 
             "claude-3-5-sonnet-20241022": {"in": 0.003, "out": 0.015},
             "mock": {"in": 0.0, "out": 0.0},
         }
@@ -139,8 +141,11 @@ This function validates input, processes the request, and returns a structured d
 
 class OpenAIProvider(LLMProvider):
     def __init__(self):
-        self.client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
-        self.model = "gpt-4-turbo-preview"
+        self.client = openai.AsyncOpenAI(
+            api_key=settings.openai_api_key,
+            base_url="https://models.inference.ai.azure.com"  # ← GitHub Models endpoint
+        )
+        self.model = "gpt-4o"  # ← GitHub Models uses gpt-4o
 
     async def generate(
         self,
@@ -162,7 +167,6 @@ class OpenAIProvider(LLMProvider):
             model=self.model,
             provider="openai",
         )
-
 
 # ── Anthropic Provider ────────────────────────────────────────────────────────
 
@@ -231,16 +235,36 @@ class LLMService:
         if force_mock:
             self._provider = MockProvider()
             logger.info("LLM: Using MOCK provider (forced)")
-        elif settings.anthropic_api_key and settings.anthropic_api_key != "your_anthropic_key_here":
+        elif settings.anthropic_api_key and settings.anthropic_api_key != "your_anthropic_api_key_here":
             self._provider = AnthropicProvider()
             logger.info("LLM: Using Anthropic (Claude)")
-        elif settings.openai_api_key and settings.openai_api_key != "your_openai_key_here":
+        elif settings.openai_api_key and settings.openai_api_key != "your_openai_api_key_here":
             self._provider = OpenAIProvider()
             logger.info("LLM: Using OpenAI (GPT-4)")
         else:
             self._provider = MockProvider()
             logger.info("LLM: Using MOCK provider (no API keys set)")
 
+    async def generate(
+        self,
+        messages: List[Dict],
+        temperature: float = 0.7,
+        max_tokens: int = 2000,
+    ) -> LLMResponse:
+        start = time.time()
+        response = await self._provider.generate(messages, temperature, max_tokens)
+        elapsed_ms = int((time.time() - start) * 1000)
+
+        logger.debug(
+            f"LLM call | provider={response.provider} | "
+            f"tokens={response.total_tokens} | "
+            f"cost=${response.estimated_cost_usd():.4f} | "
+            f"time={elapsed_ms}ms"
+        )
+
+        return response
+    
+    @async_retry(max_attempts=3, initial_delay=2.0)
     async def generate(
         self,
         messages: List[Dict],

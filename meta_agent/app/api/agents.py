@@ -8,6 +8,7 @@ from app.core.security import get_current_user
 from app.core.orchestrator import MetaAgentOrchestrator
 from app.models.database import Project, Task, User
 from app.utils.logger import logger
+from app.utils.rate_limiter import rate_limiter
 
 router = APIRouter()
 orchestrator = MetaAgentOrchestrator()
@@ -59,6 +60,9 @@ async def execute(
       "request": "Write a Python function that validates email addresses"
     }
     """
+    # Rate limit check
+    rate_limiter.enforce(str(current_user.id))
+    
     # Verify project belongs to user
     project = db.query(Project).filter(
         Project.id == data.project_id,
