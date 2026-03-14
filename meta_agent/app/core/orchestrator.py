@@ -13,7 +13,7 @@ from app.agents.documentation_agent import DocumentationAgent
 from app.core.task_decomposer import TaskDecomposer, DecomposedTask
 from app.models.database import Task, TaskStatus, AgentType, Project
 from app.utils.logger import logger
-
+from app.agents.requirements_gatherer import RequirementsGathererAgent
 
 # ── Agent Registry ────────────────────────────────────────────────────────────
 AGENT_REGISTRY: Dict[str, BaseAgent] = {
@@ -22,6 +22,7 @@ AGENT_REGISTRY: Dict[str, BaseAgent] = {
     "database_schema": DatabaseSchemaAgent(),
     "testing_agent": TestingAgent(),
     "documentation_agent": DocumentationAgent(),
+    "requirements_gatherer": RequirementsGathererAgent(),
 }
 
 

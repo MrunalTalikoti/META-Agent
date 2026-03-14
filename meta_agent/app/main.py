@@ -8,6 +8,7 @@ from app.core.database import init_db, check_db_connection
 from app.utils.logger import logger
 from app.api import auth, projects
 from app.api import auth, projects, agents
+from app.api import auth, projects, agents, conversations
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -48,6 +49,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/auth", tags=["Auth"])
 app.include_router(projects.router, prefix="/api/projects", tags=["Projects"])
 app.include_router(agents.router, prefix="/api/agents", tags=["Agents"])
+app.include_router(conversations.router, prefix="/api/conversations", tags=["Conversations"])
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/", tags=["Root"])
