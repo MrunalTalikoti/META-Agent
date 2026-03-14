@@ -1,9 +1,9 @@
 import enum
-from datetime import datetime
+from datetime import datetime, date
 
 from sqlalchemy import (
     Column, DateTime, Enum, ForeignKey,
-    Integer, JSON, String, Text
+    Integer, JSON, String, Text, Date
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -28,6 +28,26 @@ class AgentType(enum.Enum):
     DATABASE_SCHEMA = "database_schema"
     TESTING_AGENT = "testing_agent"
     DOCUMENTATION_AGENT = "documentation_agent"
+    REQUIREMENTS_GATHERER = "requirements_gatherer"
+
+
+class ExecutionMode(enum.Enum):
+    NORMAL = "normal"
+    HARDCORE = "hardcore"
+
+
+class ConversationStatus(enum.Enum):
+    GATHERING = "gathering_requirements"
+    READY = "ready_to_execute"
+    EXECUTING = "executing"
+    COMPLETED = "completed"
+    REFINING = "refining"
+
+
+class UserTier(enum.Enum):
+    FREE = "free"
+    PRO = "pro"
+    ENTERPRISE = "enterprise"
 
 
 # ── Models ───────────────────────────────────────────────────────────────────
@@ -39,10 +59,18 @@ class User(Base):
     email = Column(String(255), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     is_active = Column(Integer, default=1)
+    
+    # Tier system for monetization
+    tier = Column(Enum(UserTier), default=UserTier.FREE, nullable=False)
+    requests_today = Column(Integer, default=0)
+    last_request_date = Column(Date, default=lambda: datetime.utcnow().date())
+    subscription_expires = Column(DateTime, nullable=True)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
+    conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User id={self.id} email={self.email}>"
@@ -60,9 +88,48 @@ class Project(Base):
 
     user = relationship("User", back_populates="projects")
     tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
+    conversations = relationship("Conversation", back_populates="project", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Project id={self.id} name={self.name}>"
+
+
+class Conversation(Base):
+    """
+    Stores conversational interactions for both modes:
+    - NORMAL: Single turn (user request → immediate execution)
+    - HARDCORE: Multi-turn (requirements gathering → execution)
+    """
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    mode = Column(Enum(ExecutionMode), default=ExecutionMode.NORMAL, nullable=False)
+    status = Column(Enum(ConversationStatus), default=ConversationStatus.GATHERING, nullable=False)
+
+    # Conversation history (list of {role: "user"|"assistant", content: str})
+    messages = Column(JSON, default=list, nullable=False)
+
+    # For HARDCORE mode: accumulated requirements
+    gathered_requirements = Column(JSON, nullable=True)
+    
+    # Final consolidated prompt (set when status → READY)
+    final_prompt = Column(Text, nullable=True)
+
+    # Link to the execution task (set when execution starts)
+    execution_task_id = Column(Integer, ForeignKey("tasks.id"), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = relationship("Project", back_populates="conversations")
+    user = relationship("User", back_populates="conversations")
+    execution_task = relationship("Task", foreign_keys=[execution_task_id])
+
+    def __repr__(self):
+        return f"<Conversation id={self.id} mode={self.mode.value} status={self.status.value}>"
 
 
 class Task(Base):
@@ -110,7 +177,7 @@ class AgentExecution(Base):
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
 
     agent_name = Column(String(100), nullable=False)
-    llm_provider = Column(String(50), nullable=False)   # openai / anthropic
+    llm_provider = Column(String(50), nullable=False)   # openai / anthropic / mock
     model_used = Column(String(100), nullable=False)
 
     prompt_tokens = Column(Integer, default=0)
