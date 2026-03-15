@@ -14,6 +14,7 @@ from app.models.database import (
 from app.agents.requirements_gatherer import RequirementsGathererAgent
 from app.core.orchestrator import MetaAgentOrchestrator
 from app.utils.logger import logger
+from app.utils.tier_limits import check_rate_limit
 
 router = APIRouter()
 gatherer = RequirementsGathererAgent()

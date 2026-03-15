@@ -9,6 +9,7 @@ from app.core.orchestrator import MetaAgentOrchestrator
 from app.models.database import Project, Task, User
 from app.utils.logger import logger
 from app.utils.rate_limiter import rate_limiter
+from app.utils.tier_limits import check_rate_limit
 
 router = APIRouter()
 orchestrator = MetaAgentOrchestrator()
@@ -62,6 +63,7 @@ async def execute(
     """
     # Rate limit check
     rate_limiter.enforce(str(current_user.id))
+    check_rate_limit(current_user, db)
     
     # Verify project belongs to user
     project = db.query(Project).filter(
