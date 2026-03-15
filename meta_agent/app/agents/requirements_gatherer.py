@@ -134,6 +134,90 @@ REMEMBER:
 - Only mark "ready" when ALL SIX fields (functional, tech_stack, architecture, scale, deliverables, constraints) are explicitly filled
 """
 
+    async def run_with_history(
+        self,
+        conversation_messages: list,
+        gathered_so_far: dict,
+        task_db_record,
+        db,
+    ):
+        """
+        Run the gatherer with actual multi-turn conversation history instead of
+        a flat text dump. This gives the LLM proper turn-by-turn context so it
+        doesn't prematurely mark requirements as complete.
+        """
+        import time
+        from app.services.llm_service import LLMService
+        from app.agents.base_agent import AgentResult
+
+        llm = LLMService()
+        start_ms = int(time.time() * 1000)
+
+        # Build the missing-fields note
+        all_fields = ["functional", "tech_stack", "architecture", "scale", "deliverables", "constraints"]
+        missing = [f for f in all_fields if not gathered_so_far.get(f)]
+        if missing:
+            continuation_note = (
+                f"Fields still EMPTY — you MUST ask about one of these before marking ready: "
+                f"{', '.join(missing)}"
+            )
+        else:
+            continuation_note = "All fields are filled. You may mark as ready."
+
+        # Build proper multi-turn messages for the LLM.
+        # The last message is always a user turn — merge the state context into it
+        # to avoid two consecutive user messages (Anthropic API requires alternating roles).
+        turns = [
+            {"role": m.get("role"), "content": m.get("content", "")}
+            for m in conversation_messages
+            if m.get("role") in ("user", "assistant")
+        ]
+
+        if turns and turns[-1]["role"] == "user":
+            last_user_content = turns[-1]["content"]
+            turns[-1] = {
+                "role": "user",
+                "content": (
+                    f"{last_user_content}\n\n"
+                    f"[Current gathered_so_far: {json.dumps(gathered_so_far)}]\n"
+                    f"[{continuation_note}]\n"
+                    "Ask the next clarifying question for a missing field, "
+                    "or mark as ready only if ALL fields are filled."
+                )
+            }
+        else:
+            # Fallback: append a fresh user instruction turn
+            turns.append({
+                "role": "user",
+                "content": (
+                    f"[Current gathered_so_far: {json.dumps(gathered_so_far)}]\n"
+                    f"[{continuation_note}]\n"
+                    "Ask the next clarifying question for a missing field, "
+                    "or mark as ready only if ALL fields are filled."
+                )
+            })
+
+        messages = [{"role": "system", "content": self.get_system_prompt()}, *turns]
+
+        try:
+            llm_response = await llm.generate(messages)
+        except Exception as e:
+            return AgentResult(
+                success=False,
+                output={},
+                agent_name=self.name,
+                execution_time_ms=int(time.time() * 1000) - start_ms,
+                error=str(e),
+            )
+
+        parsed = self.parse_output(llm_response.content)
+        return AgentResult(
+            success=True,
+            output=parsed,
+            agent_name=self.name,
+            execution_time_ms=int(time.time() * 1000) - start_ms,
+        )
+
     def parse_output(self, raw_content: str) -> dict:
         """
         Extract JSON from LLM response.

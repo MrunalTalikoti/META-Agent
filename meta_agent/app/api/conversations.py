@@ -1,4 +1,3 @@
-import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -186,6 +185,7 @@ async def start_conversation(
                     })
                     conversation.gathered_requirements = output.get("gathered_so_far", {})
                     flag_modified(conversation, "messages")
+                    flag_modified(conversation, "gathered_requirements")
                     db.commit()
 
                 elif output.get("status") == "ready":
@@ -273,30 +273,16 @@ async def send_message(
         db.flush()
 
         try:
+            gathered = conversation.gathered_requirements or {}
+
             # Build conversation history for context
             history = "\n".join([
                 f"{msg['role'].upper()}: {msg['content']}"
                 for msg in conversation.messages
             ])
 
-            # Include current gathered state so the model knows what's still missing
-            gathered = conversation.gathered_requirements or {}
-            missing_fields = [
-                field for field in ["functional", "tech_stack", "architecture", "scale", "deliverables", "constraints"]
-                if not gathered.get(field)
-            ]
-            missing_note = (
-                f"\n\nFields still EMPTY and must be gathered before marking ready: {', '.join(missing_fields)}"
-                if missing_fields else "\n\nAll fields are filled — you may mark as ready."
-            )
-
             result = await gatherer.run(
-                description=(
-                    f"Conversation so far:\n{history}\n\n"
-                    f"Current gathered_so_far state:\n{json.dumps(gathered, indent=2)}"
-                    f"{missing_note}\n\n"
-                    "Ask the next clarifying question for one of the missing fields, or mark as ready only if ALL fields are filled."
-                ),
+                description=f"Conversation so far:\n{history}\n\nGathered requirements: {gathered}\n\nBased on the user's latest response, either ask the next clarifying question or mark as ready if you have enough information.",
                 task_db_record=gathering_task,
                 db=db
             )
@@ -329,6 +315,7 @@ async def send_message(
                     })
 
                 flag_modified(conversation, "messages")
+                flag_modified(conversation, "gathered_requirements")
                 db.commit()
 
             gathering_task.status = TaskStatus.COMPLETED

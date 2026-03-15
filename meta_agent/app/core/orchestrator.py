@@ -14,6 +14,10 @@ from app.core.task_decomposer import TaskDecomposer, DecomposedTask
 from app.models.database import Task, TaskStatus, AgentType, Project
 from app.utils.logger import logger
 from app.agents.requirements_gatherer import RequirementsGathererAgent
+from app.agents.frontend_generator import FrontendGeneratorAgent
+from app.agents.devops_agent import DevOpsAgent
+from app.agents.security_auditor import SecurityAuditorAgent
+from app.agents.performance_optimizer import PerformanceOptimizerAgent
 
 # ── Agent Registry ────────────────────────────────────────────────────────────
 AGENT_REGISTRY: Dict[str, BaseAgent] = {
@@ -23,6 +27,10 @@ AGENT_REGISTRY: Dict[str, BaseAgent] = {
     "testing_agent": TestingAgent(),
     "documentation_agent": DocumentationAgent(),
     "requirements_gatherer": RequirementsGathererAgent(),
+    "frontend_generator": FrontendGeneratorAgent(),
+    "devops": DevOpsAgent(),
+    "security_auditor": SecurityAuditorAgent(),
+    "performance_optimizer": PerformanceOptimizerAgent(),
 }
 
 
