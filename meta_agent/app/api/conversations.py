@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from pydantic import BaseModel, field_validator
 from typing import Optional, List
-from datetime import datetime
 
 from app.core.database import get_db
 from app.core.security import get_current_user
@@ -25,7 +24,7 @@ orchestrator = MetaAgentOrchestrator()
 
 class ConversationCreate(BaseModel):
     project_id: int
-    mode: str = "normal"  # "normal" or "hardcore"
+    mode: str = "normal"
     initial_message: str
 
     @field_validator("mode")
@@ -56,12 +55,6 @@ class MessageSend(BaseModel):
         return v.strip()
 
 
-class MessageResponse(BaseModel):
-    role: str
-    content: str
-    result: Optional[dict] = None
-
-
 class ConversationResponse(BaseModel):
     id: int
     mode: str
@@ -74,155 +67,150 @@ class ConversationResponse(BaseModel):
         from_attributes = True
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _make_gathering_task(project_id: int, title: str = "Requirements Gathering") -> Task:
+    return Task(
+        project_id=project_id,
+        title=title,
+        description="Gather complete requirements before execution",
+        agent_type=AgentType.REQUIREMENTS_GATHERER,
+        status=TaskStatus.IN_PROGRESS,
+    )
+
+
+async def _ask_gatherer(conversation: Conversation, db: Session) -> None:
+    """
+    Run requirements gatherer using proper multi-turn history (run_with_history).
+    Updates conversation messages and gathered_requirements in place.
+    """
+    gathering_task = _make_gathering_task(conversation.project_id, "Requirements Gathering (turn)")
+    db.add(gathering_task)
+    db.flush()
+
+    gathered = conversation.gathered_requirements or {}
+
+    try:
+        result = await gatherer.run_with_history(
+            conversation_messages=conversation.messages,
+            gathered_so_far=gathered,
+            task_db_record=gathering_task,
+            db=db,
+        )
+
+        if result.success:
+            output = result.output
+            status_val = output.get("status")
+
+            if status_val == "needs_clarification":
+                conversation.messages.append({
+                    "role": "assistant",
+                    "content": output["question"],
+                })
+                conversation.gathered_requirements = output.get("gathered_so_far", gathered)
+
+            elif status_val == "ready":
+                conversation.status = ConversationStatus.READY
+                conversation.final_prompt = output["final_prompt"]
+                conversation.gathered_requirements = output.get("requirements_summary", {})
+                conversation.messages.append({
+                    "role": "assistant",
+                    "content": (
+                        f"I have everything I need.\n\n"
+                        f"**Final specification:**\n{output['final_prompt']}\n\n"
+                        f"Reply **execute** to start building, or tell me what to change."
+                    ),
+                })
+            else:
+                conversation.messages.append({
+                    "role": "assistant",
+                    "content": "I had trouble parsing that. Could you rephrase?",
+                })
+
+        else:
+            conversation.messages.append({
+                "role": "assistant",
+                "content": f"Sorry, I encountered an error: {result.error}",
+            })
+
+        gathering_task.status = TaskStatus.COMPLETED
+    except Exception as e:
+        logger.error(f"Requirements gathering failed: {e}", exc_info=True)
+        gathering_task.status = TaskStatus.FAILED
+        gathering_task.error_message = str(e)
+        conversation.messages.append({
+            "role": "assistant",
+            "content": f"Sorry, something went wrong: {str(e)}",
+        })
+
+    flag_modified(conversation, "messages")
+    flag_modified(conversation, "gathered_requirements")
+    db.commit()
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
 async def start_conversation(
     data: ConversationCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """
-    Start a new conversation in either mode:
-    - NORMAL: Executes immediately
-    - HARDCORE: Starts requirements gathering
-    """
+    # Rate limit
+    check_rate_limit(current_user, db)
 
-    # Verify project access
     project = db.query(Project).filter(
         Project.id == data.project_id,
         Project.user_id == current_user.id
     ).first()
-    
     if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found"
-        )
+        raise HTTPException(status_code=404, detail="Project not found")
 
-    # Determine mode
     mode = ExecutionMode.HARDCORE if data.mode == "hardcore" else ExecutionMode.NORMAL
 
-    # Create conversation
     conversation = Conversation(
         project_id=data.project_id,
         user_id=current_user.id,
         mode=mode,
         status=ConversationStatus.GATHERING if mode == ExecutionMode.HARDCORE else ConversationStatus.READY,
-        messages=[{"role": "user", "content": data.initial_message}]
+        messages=[{"role": "user", "content": data.initial_message}],
     )
     db.add(conversation)
     db.commit()
     db.refresh(conversation)
 
-    logger.info(
-        f"Conversation started | mode={mode.value} | "
-        f"user={current_user.email} | project={project.name}"
-    )
+    logger.info(f"Conversation {conversation.id} started | mode={mode.value} | user={current_user.email}")
 
-    # ── NORMAL MODE: Execute immediately ──────────────────────────────────────
+    # ── NORMAL MODE: execute immediately ──────────────────────────────────────
     if mode == ExecutionMode.NORMAL:
         conversation.status = ConversationStatus.EXECUTING
         conversation.final_prompt = data.initial_message
         db.commit()
-
         try:
-            # Execute
             result = await orchestrator.process(
                 user_request=data.initial_message,
                 project_id=data.project_id,
-                db=db
+                db=db,
             )
-
-            # Update conversation
             conversation.status = ConversationStatus.COMPLETED
             conversation.messages.append({
                 "role": "assistant",
                 "content": "✓ Execution complete! See results below.",
-                "result": result.to_dict()
+                "result": result.to_dict(),
             })
-            flag_modified(conversation, "messages")
-            db.commit()
-
         except Exception as e:
             logger.error(f"Execution failed: {e}", exc_info=True)
             conversation.status = ConversationStatus.COMPLETED
             conversation.messages.append({
                 "role": "assistant",
-                "content": f"✗ Execution failed: {str(e)}"
+                "content": f"✗ Execution failed: {str(e)}",
             })
-            flag_modified(conversation, "messages")
-            db.commit()
+        flag_modified(conversation, "messages")
+        db.commit()
 
-    # ── HARDCORE MODE: Start requirements gathering ──────────────────────────
+    # ── HARDCORE MODE: start gathering ────────────────────────────────────────
     else:
-        # Create a task for the requirements gathering
-        gathering_task = Task(
-            project_id=data.project_id,
-            title="Requirements Gathering",
-            description="Gather complete requirements before execution",
-            agent_type=AgentType.REQUIREMENTS_GATHERER,
-            status=TaskStatus.IN_PROGRESS
-        )
-        db.add(gathering_task)
-        db.flush()
-
-        try:
-            # Ask first clarifying question
-            result = await gatherer.run(
-                description=f"User's initial request: {data.initial_message}\n\nAsk your first clarifying question.",
-                task_db_record=gathering_task,
-                db=db
-            )
-
-            if result.success:
-                output = result.output
-
-                if output.get("status") == "needs_clarification":
-                    # Add assistant's question to conversation
-                    conversation.messages.append({
-                        "role": "assistant",
-                        "content": output["question"]
-                    })
-                    conversation.gathered_requirements = output.get("gathered_so_far", {})
-                    flag_modified(conversation, "messages")
-                    flag_modified(conversation, "gathered_requirements")
-                    db.commit()
-
-                elif output.get("status") == "ready":
-                    # Rare case: first message was complete enough
-                    conversation.status = ConversationStatus.READY
-                    conversation.final_prompt = output["final_prompt"]
-                    conversation.gathered_requirements = output.get("requirements_summary", {})
-                    conversation.messages.append({
-                        "role": "assistant",
-                        "content": f"Perfect! I have everything I need:\n\n{output['final_prompt']}\n\nReply with 'execute' to proceed."
-                    })
-                    flag_modified(conversation, "messages")
-                    db.commit()
-
-                else:
-                    # Error case
-                    conversation.messages.append({
-                        "role": "assistant",
-                        "content": "I encountered an error understanding your request. Could you rephrase it?"
-                    })
-                    flag_modified(conversation, "messages")
-                    db.commit()
-
-            gathering_task.status = TaskStatus.COMPLETED
-            db.commit()
-
-        except Exception as e:
-            logger.error(f"Requirements gathering failed: {e}", exc_info=True)
-            gathering_task.status = TaskStatus.FAILED
-            gathering_task.error_message = str(e)
-            conversation.messages.append({
-                "role": "assistant",
-                "content": f"Sorry, I encountered an error: {str(e)}"
-            })
-            flag_modified(conversation, "messages")
-            db.commit()
+        await _ask_gatherer(conversation, db)
 
     db.refresh(conversation)
     return conversation
@@ -233,104 +221,30 @@ async def send_message(
     conversation_id: int,
     data: MessageSend,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """
-    Continue conversation:
-    - HARDCORE + GATHERING: Continue requirements gathering
-    - HARDCORE + READY: Execute when user says "execute"
-    - Any + COMPLETED: Refine the output
-    """
-
-    # Fetch conversation
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id,
-        Conversation.user_id == current_user.id
+        Conversation.user_id == current_user.id,
     ).first()
-
     if not conversation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found"
-        )
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # Add user message
+    # Append user message
     conversation.messages.append({"role": "user", "content": data.message})
     flag_modified(conversation, "messages")
     db.commit()
 
-    # ── HARDCORE + GATHERING: Continue asking questions ──────────────────────
-    if (conversation.mode == ExecutionMode.HARDCORE and 
-        conversation.status == ConversationStatus.GATHERING):
+    # ── GATHERING: continue questions ─────────────────────────────────────────
+    if (conversation.mode == ExecutionMode.HARDCORE
+            and conversation.status == ConversationStatus.GATHERING):
+        await _ask_gatherer(conversation, db)
 
-        gathering_task = Task(
-            project_id=conversation.project_id,
-            title="Requirements Gathering (continued)",
-            description="Continue gathering requirements",
-            agent_type=AgentType.REQUIREMENTS_GATHERER,
-            status=TaskStatus.IN_PROGRESS
-        )
-        db.add(gathering_task)
-        db.flush()
+    # ── READY + trigger word: execute ─────────────────────────────────────────
+    elif (conversation.status == ConversationStatus.READY
+          and data.message.lower().strip() in {"execute", "yes", "go", "start", "proceed", "run"}):
 
-        try:
-            gathered = conversation.gathered_requirements or {}
-
-            # Build conversation history for context
-            history = "\n".join([
-                f"{msg['role'].upper()}: {msg['content']}"
-                for msg in conversation.messages
-            ])
-
-            result = await gatherer.run(
-                description=f"Conversation so far:\n{history}\n\nGathered requirements: {gathered}\n\nBased on the user's latest response, either ask the next clarifying question or mark as ready if you have enough information.",
-                task_db_record=gathering_task,
-                db=db
-            )
-
-            if result.success:
-                output = result.output
-
-                if output.get("status") == "ready":
-                    # Requirements complete!
-                    conversation.status = ConversationStatus.READY
-                    conversation.final_prompt = output["final_prompt"]
-                    conversation.gathered_requirements = output.get("requirements_summary", {})
-                    conversation.messages.append({
-                        "role": "assistant",
-                        "content": f"Perfect! I have all the information I need.\n\n**Final Specification:**\n{output['final_prompt']}\n\n**Reply with 'execute' to start building, or ask me to change anything.**"
-                    })
-
-                elif output.get("status") == "needs_clarification":
-                    # More questions
-                    conversation.messages.append({
-                        "role": "assistant",
-                        "content": output["question"]
-                    })
-                    conversation.gathered_requirements = output.get("gathered_so_far", {})
-
-                else:
-                    conversation.messages.append({
-                        "role": "assistant",
-                        "content": "I'm having trouble understanding. Could you clarify?"
-                    })
-
-                flag_modified(conversation, "messages")
-                flag_modified(conversation, "gathered_requirements")
-                db.commit()
-
-            gathering_task.status = TaskStatus.COMPLETED
-            db.commit()
-
-        except Exception as e:
-            logger.error(f"Requirements gathering failed: {e}", exc_info=True)
-            gathering_task.status = TaskStatus.FAILED
-            db.commit()
-
-    # ── READY + "execute": Start execution ───────────────────────────────────
-    elif (conversation.status == ConversationStatus.READY and 
-          data.message.lower().strip() in ["execute", "yes", "go", "start", "proceed"]):
-
+        check_rate_limit(current_user, db)
         conversation.status = ConversationStatus.EXECUTING
         db.commit()
 
@@ -338,70 +252,66 @@ async def send_message(
             result = await orchestrator.process(
                 user_request=conversation.final_prompt,
                 project_id=conversation.project_id,
-                db=db
+                db=db,
             )
+            # Set execution_task_id to first task created (approximate link)
+            first_task = db.query(Task).filter(
+                Task.project_id == conversation.project_id
+            ).order_by(Task.id.desc()).first()
+            if first_task:
+                conversation.execution_task_id = first_task.id
 
             conversation.status = ConversationStatus.COMPLETED
             conversation.messages.append({
                 "role": "assistant",
                 "content": "✓ Execution complete! Here are your results:",
-                "result": result.to_dict()
+                "result": result.to_dict(),
             })
-            flag_modified(conversation, "messages")
-            db.commit()
-
         except Exception as e:
             logger.error(f"Execution failed: {e}", exc_info=True)
             conversation.status = ConversationStatus.COMPLETED
             conversation.messages.append({
                 "role": "assistant",
-                "content": f"✗ Execution failed: {str(e)}"
+                "content": f"✗ Execution failed: {str(e)}",
             })
-            flag_modified(conversation, "messages")
-            db.commit()
-
-    # ── COMPLETED: Refinement ────────────────────────────────────────────────
-    elif conversation.status == ConversationStatus.COMPLETED:
-        conversation.status = ConversationStatus.REFINING
+        flag_modified(conversation, "messages")
         db.commit()
 
+    # ── COMPLETED: refinement ─────────────────────────────────────────────────
+    elif conversation.status == ConversationStatus.COMPLETED:
+        check_rate_limit(current_user, db)
+        conversation.status = ConversationStatus.REFINING
+        db.commit()
         try:
-            # Build refinement prompt
-            refinement_prompt = f"Based on the previously generated code, make this modification: {data.message}"
-
+            refinement_prompt = f"Modify the previously generated code: {data.message}"
             result = await orchestrator.process(
                 user_request=refinement_prompt,
                 project_id=conversation.project_id,
-                db=db
+                db=db,
             )
-
             conversation.status = ConversationStatus.COMPLETED
             conversation.messages.append({
                 "role": "assistant",
                 "content": "✓ Refinement complete!",
-                "result": result.to_dict()
+                "result": result.to_dict(),
             })
-            flag_modified(conversation, "messages")
-            db.commit()
-
         except Exception as e:
             logger.error(f"Refinement failed: {e}", exc_info=True)
             conversation.status = ConversationStatus.COMPLETED
             conversation.messages.append({
                 "role": "assistant",
-                "content": f"✗ Refinement failed: {str(e)}"
+                "content": f"✗ Refinement failed: {str(e)}",
             })
-            flag_modified(conversation, "messages")
-            db.commit()
+        flag_modified(conversation, "messages")
+        db.commit()
 
-    # ── READY but not "execute": User changing requirements ──────────────────
+    # ── READY but not trigger: user modifying requirements ────────────────────
     elif conversation.status == ConversationStatus.READY:
-        # User wants to modify the final prompt
         conversation.status = ConversationStatus.GATHERING
         conversation.final_prompt = None
         conversation.messages.append({
             "role": "assistant",
-            "content": "Got it, let me update the requirements. What would you like to change?"
+            "content": "Got it — let me update the requirements. What would you like to change?",
         })
         flag_modified(conversation, "messages")
         db.commit()
@@ -414,21 +324,14 @@ async def send_message(
 async def get_conversation(
     conversation_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Get conversation details and history"""
-
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id,
-        Conversation.user_id == current_user.id
+        Conversation.user_id == current_user.id,
     ).first()
-
     if not conversation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Conversation not found"
-        )
-
+        raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
 
 
@@ -436,42 +339,31 @@ async def get_conversation(
 async def list_conversations(
     project_id: Optional[int] = None,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """List all conversations for current user, optionally filtered by project"""
-
     query = db.query(Conversation).filter(Conversation.user_id == current_user.id)
-
     if project_id:
-        # Verify project access
         project = db.query(Project).filter(
             Project.id == project_id,
-            Project.user_id == current_user.id
+            Project.user_id == current_user.id,
         ).first()
         if not project:
             raise HTTPException(404, "Project not found")
-        
         query = query.filter(Conversation.project_id == project_id)
-
-    conversations = query.order_by(Conversation.created_at.desc()).all()
-    return conversations
+    return query.order_by(Conversation.created_at.desc()).all()
 
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_conversation(
     conversation_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Delete a conversation"""
-
     conversation = db.query(Conversation).filter(
         Conversation.id == conversation_id,
-        Conversation.user_id == current_user.id
+        Conversation.user_id == current_user.id,
     ).first()
-
     if not conversation:
         raise HTTPException(404, "Conversation not found")
-
     db.delete(conversation)
     db.commit()

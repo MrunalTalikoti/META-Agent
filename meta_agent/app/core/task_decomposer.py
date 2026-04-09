@@ -6,12 +6,18 @@ from app.models.database import AgentType
 from app.utils.logger import logger
 
 
+# All agents that exist in the registry
 AVAILABLE_AGENTS = {
-    "code_generator": "Writes code in any language (Python, JS, Go, etc.)",
-    "api_designer": "Designs REST API endpoints, request/response schemas",
-    "database_schema": "Designs database tables, columns, and relationships",
-    "testing_agent": "Writes unit tests and integration tests",
-    "documentation_agent": "Creates README files, API docs, and user guides",
+    "code_generator":        "Writes production code in any language (Python, JS, Go, etc.)",
+    "api_designer":          "Designs REST API endpoints, request/response schemas, auth flows",
+    "database_schema":       "Designs database tables, columns, relationships, and generates SQL DDL",
+    "testing_agent":         "Writes unit tests, integration tests, and test fixtures",
+    "documentation_agent":   "Creates README files, API docs, user guides, and inline comments",
+    "frontend_generator":    "Creates React/Vue/HTML frontend components with Tailwind CSS",
+    "devops":                "Generates Dockerfile, docker-compose, GitHub Actions CI/CD configs",
+    "security_auditor":      "Audits code for vulnerabilities: SQLi, XSS, auth flaws, secrets",
+    "performance_optimizer": "Identifies bottlenecks, N+1 queries, caching opportunities",
+    "requirements_gatherer": "Asks clarifying questions to gather complete project requirements",
 }
 
 
@@ -32,10 +38,6 @@ class TaskDecomposer:
         self.llm = LLMService()
 
     async def decompose(self, user_request: str, project_context: str = None) -> list[DecomposedTask]:
-        """
-        Breaks a user's request into ordered subtasks.
-        Each subtask is assigned to one specialized agent.
-        """
         agent_descriptions = "\n".join(
             f"- {name}: {desc}" for name, desc in AVAILABLE_AGENTS.items()
         )
@@ -48,10 +50,11 @@ AVAILABLE AGENTS:
 RULES:
 1. Only use the agent names listed above (exact spelling)
 2. If a task needs output from another task, list that task's ID in "dependencies"
-3. Keep descriptions specific and actionable (not vague)
+3. Keep descriptions specific and actionable
 4. Minimum 1 task, maximum 8 tasks
 5. Return ONLY valid JSON — no markdown, no explanation
-6. If you return anything other than a JSON array, the system will fail.
+6. Always include a security_auditor task for any project that has user data, auth, or API endpoints
+7. Include devops task for any project that needs deployment
 
 OUTPUT FORMAT (JSON array only):
 [
@@ -73,10 +76,14 @@ OUTPUT FORMAT (JSON array only):
             {"role": "user", "content": user_message},
         ]
 
-        response = await self.llm.generate(messages, temperature=0.2)  # Low temp for consistent JSON
-
+        response = await self.llm.generate(messages, temperature=0.2)
         tasks = self._parse_response(response.content)
-        self._validate_tasks(tasks)
+
+        try:
+            self._validate_tasks(tasks)
+        except ValueError as e:
+            logger.error(f"Task decomposition validation failed: {e}")
+            raise
 
         logger.info(f"Decomposed '{user_request[:50]}...' into {len(tasks)} tasks")
         for t in tasks:
@@ -85,12 +92,9 @@ OUTPUT FORMAT (JSON array only):
         return tasks
 
     def _parse_response(self, content: str) -> list[DecomposedTask]:
-        """Parse JSON from LLM response. Handles markdown-wrapped JSON too."""
-        # Strip markdown code blocks if present
         json_match = re.search(r"```(?:json)?\n?(.*?)```", content, re.DOTALL)
         json_str = json_match.group(1) if json_match else content
 
-        # Find JSON array
         array_match = re.search(r"\[.*\]", json_str, re.DOTALL)
         if not array_match:
             raise ValueError(f"No JSON array found in decomposer response: {content[:200]}")
@@ -109,22 +113,40 @@ OUTPUT FORMAT (JSON array only):
         ]
 
     def _validate_tasks(self, tasks: list[DecomposedTask]) -> None:
-        """Ensure task list is valid before executing."""
         task_ids = {t.id for t in tasks}
 
         for task in tasks:
-            # Check agent name is valid
             if task.agent not in AVAILABLE_AGENTS:
                 raise ValueError(
                     f"Unknown agent '{task.agent}' in task {task.id}. "
                     f"Valid agents: {list(AVAILABLE_AGENTS.keys())}"
                 )
-
-            # Check dependencies reference valid task IDs
             for dep_id in task.dependencies:
                 if dep_id not in task_ids:
                     raise ValueError(
                         f"Task {task.id} depends on task {dep_id} which doesn't exist"
                     )
 
+        # Detect circular dependencies via DFS
+        self._check_circular(tasks)
         logger.debug("Task decomposition validation passed")
+
+    def _check_circular(self, tasks: list[DecomposedTask]) -> None:
+        graph = {t.id: set(t.dependencies) for t in tasks}
+        visited, in_stack = set(), set()
+
+        def dfs(node):
+            visited.add(node)
+            in_stack.add(node)
+            for dep in graph.get(node, set()):
+                if dep not in visited:
+                    dfs(dep)
+                elif dep in in_stack:
+                    raise ValueError(
+                        f"Circular dependency detected involving task {dep}"
+                    )
+            in_stack.remove(node)
+
+        for task_id in graph:
+            if task_id not in visited:
+                dfs(task_id)

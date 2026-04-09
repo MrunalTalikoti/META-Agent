@@ -32,12 +32,13 @@ class LLMResponse:
         self.provider = provider
 
     def estimated_cost_usd(self) -> float:
-        """Rough cost in USD. Stored as microdollars in DB."""
         rates = {
-            "gpt-4-turbo-preview": {"in": 0.01, "out": 0.03},
-            "gpt-4o": {"in": 0.0, "out": 0.0}, 
-            "claude-3-5-sonnet-20241022": {"in": 0.003, "out": 0.015},
-            "mock": {"in": 0.0, "out": 0.0},
+            "gpt-4o":                        {"in": 0.0025, "out": 0.010},
+            "gpt-4o-mini":                   {"in": 0.00015, "out": 0.0006},
+            "gpt-4-turbo-preview":           {"in": 0.01,   "out": 0.03},
+            "claude-3-5-sonnet-20241022":    {"in": 0.003,  "out": 0.015},
+            "claude-3-5-haiku-20241022":     {"in": 0.0008, "out": 0.004},
+            "mock":                          {"in": 0.0,    "out": 0.0},
         }
         r = rates.get(self.model, {"in": 0.01, "out": 0.03})
         return (self.prompt_tokens / 1000 * r["in"]) + (self.completion_tokens / 1000 * r["out"])
@@ -56,39 +57,27 @@ class LLMProvider(ABC):
         pass
 
 
-# ── Mock Provider (use when no API keys) ─────────────────────────────────────
+# ── Mock Provider ─────────────────────────────────────────────────────────────
 
 class MockProvider(LLMProvider):
-    """
-    Returns realistic-looking fake responses.
-    Use this during development to avoid API costs.
-    """
-
     MOCK_RESPONSES = {
         "code": '''```python
 def process_user_request(user_id: int, request: str) -> dict:
-    """
-    Process a user request and return structured result.
-    """
+    """Process a user request and return structured result."""
     if not request or not request.strip():
         raise ValueError("Request cannot be empty")
-    
-    result = {
-        "user_id": user_id,
-        "request": request,
-        "status": "processed",
-        "data": {}
-    }
-    return result
+    return {"user_id": user_id, "request": request, "status": "processed", "data": {}}
 ```
 
 This function validates input, processes the request, and returns a structured dictionary.''',
 
-        "api": '{"endpoints": [{"path": "/api/v1/users", "method": "POST", "description": "Create user", "auth_required": false}], "authentication": "JWT", "base_url": "/api/v1"}',
+        "api": '{"endpoints": [{"path": "/api/v1/users", "method": "POST", "description": "Create user", "auth_required": false, "request_body": {"email": "string", "password": "string"}, "response_200": {"id": "integer", "email": "string"}, "error_responses": [{"code": 400, "description": "Bad request"}, {"code": 409, "description": "Email already exists"}], "rate_limit": "100 requests per minute"}], "authentication": "JWT Bearer Token", "base_url": "/api/v1", "notes": "All endpoints require HTTPS"}',
 
-        "database": '{"tables": [{"name": "users", "columns": [{"name": "id", "type": "SERIAL", "primary_key": true}, {"name": "email", "type": "VARCHAR(255)", "unique": true}]}], "relationships": []}',
+        "database": '{"tables": [{"name": "users", "description": "Stores user accounts", "columns": [{"name": "id", "type": "SERIAL", "primary_key": true, "nullable": false}, {"name": "email", "type": "VARCHAR(255)", "unique": true, "nullable": false}, {"name": "created_at", "type": "TIMESTAMP", "nullable": true, "default": "NOW()"}], "indexes": [{"name": "idx_users_email", "columns": ["email"], "unique": true}]}], "relationships": [], "database_type": "PostgreSQL", "notes": "Standard user table"}',
 
-        "default": "I have analyzed your request and generated a comprehensive response following best practices."
+        "default": "I have analyzed your request and generated a comprehensive response following best practices.",
+
+        "requirements": '{"status": "needs_clarification", "question": "What backend framework would you like to use? (1) Python/FastAPI, (2) Python/Django, (3) Node.js/Express, (4) Go/Gin", "gathered_so_far": {"functional": "TBD", "tech_stack": "", "architecture": "", "scale": "", "deliverables": "", "constraints": ""}}',
     }
 
     async def generate(
@@ -97,33 +86,30 @@ This function validates input, processes the request, and returns a structured d
         temperature: float = 0.7,
         max_tokens: int = 2000,
     ) -> LLMResponse:
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.1)
 
-        # Check if this is a task decomposition request (look at system prompt)
         system_content = next((m.get("content", "") for m in messages if m["role"] == "system"), "")
-        is_decomposer = "task decomposition" in system_content.lower() or "break down" in system_content.lower()
+        last_message = messages[-1].get("content", "").lower()
+
+        is_decomposer = "break down" in system_content.lower() or "available agents" in system_content.lower()
+        is_gatherer = "requirements analyst" in system_content.lower()
 
         if is_decomposer:
-            # Always return valid task JSON for decomposer
             content = '''[
-    {
-        "id": 1,
-        "description": "Generate code based on the user's request",
-        "agent": "code_generator",
-        "dependencies": [],
-        "inputs": {}
-    }
+    {"id": 1, "description": "Design REST API endpoints", "agent": "api_designer", "dependencies": [], "inputs": {}},
+    {"id": 2, "description": "Design database schema", "agent": "database_schema", "dependencies": [], "inputs": {}},
+    {"id": 3, "description": "Generate implementation code", "agent": "code_generator", "dependencies": [1, 2], "inputs": {}},
+    {"id": 4, "description": "Write unit and integration tests", "agent": "testing_agent", "dependencies": [3], "inputs": {}},
+    {"id": 5, "description": "Create README and API documentation", "agent": "documentation_agent", "dependencies": [3], "inputs": {}}
 ]'''
+        elif is_gatherer:
+            content = self.MOCK_RESPONSES["requirements"]
+        elif "api" in last_message or "endpoint" in last_message:
+            content = self.MOCK_RESPONSES["api"]
+        elif "database" in last_message or "schema" in last_message or "table" in last_message:
+            content = self.MOCK_RESPONSES["database"]
         else:
-            # For agent execution, pick response based on content
-            last_message = messages[-1].get("content", "").lower()
-            
-            if "api" in last_message or "endpoint" in last_message:
-                content = self.MOCK_RESPONSES["api"]
-            elif "database" in last_message or "schema" in last_message or "table" in last_message:
-                content = self.MOCK_RESPONSES["database"]
-            else:
-                content = self.MOCK_RESPONSES["code"]
+            content = self.MOCK_RESPONSES["code"]
 
         fake_prompt_tokens = sum(len(m.get("content", "")) for m in messages) // 4
         fake_completion_tokens = len(content) // 4
@@ -140,12 +126,9 @@ This function validates input, processes the request, and returns a structured d
 # ── OpenAI Provider ───────────────────────────────────────────────────────────
 
 class OpenAIProvider(LLMProvider):
-    def __init__(self):
-        self.client = openai.AsyncOpenAI(
-            api_key=settings.openai_api_key,
-            base_url="https://models.inference.ai.azure.com"  # ← GitHub Models endpoint
-        )
-        self.model = "gpt-4o"  # ← GitHub Models uses gpt-4o
+    def __init__(self, model: str = "gpt-4o"):
+        self.client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+        self.model = model
 
     async def generate(
         self,
@@ -159,7 +142,6 @@ class OpenAIProvider(LLMProvider):
             temperature=temperature,
             max_tokens=max_tokens,
         )
-
         return LLMResponse(
             content=response.choices[0].message.content,
             prompt_tokens=response.usage.prompt_tokens,
@@ -167,6 +149,14 @@ class OpenAIProvider(LLMProvider):
             model=self.model,
             provider="openai",
         )
+
+
+# ── OpenAI Mini Provider (cheap fallback) ─────────────────────────────────────
+
+class OpenAIMiniProvider(OpenAIProvider):
+    def __init__(self):
+        super().__init__(model="gpt-4o-mini")
+
 
 # ── Anthropic Provider ────────────────────────────────────────────────────────
 
@@ -181,27 +171,14 @@ class AnthropicProvider(LLMProvider):
         temperature: float = 0.7,
         max_tokens: int = 2000,
     ) -> LLMResponse:
-        # Split system message from user messages (Anthropic API requires this)
         system_msg = next(
             (m["content"] for m in messages if m["role"] == "system"),
             "You are a helpful AI assistant."
         )
-        user_messages = []
-
-        for m in messages:
-            if m["role"] == "system":
-                continue
-
-            user_messages.append({
-                "role": m["role"],
-                "content": [
-                    {
-                        "type": "text",
-                        "text": m["content"]
-                    }
-                ]
-            })
-
+        user_messages = [
+            {"role": m["role"], "content": [{"type": "text", "text": m["content"]}]}
+            for m in messages if m["role"] != "system"
+        ]
         response = await self.client.messages.create(
             model=self.model,
             max_tokens=max_tokens,
@@ -209,7 +186,6 @@ class AnthropicProvider(LLMProvider):
             system=system_msg,
             messages=user_messages,
         )
-
         return LLMResponse(
             content=response.content[0].text,
             prompt_tokens=response.usage.input_tokens,
@@ -223,47 +199,37 @@ class AnthropicProvider(LLMProvider):
 
 class LLMService:
     """
-    Use this everywhere in the codebase. Never instantiate providers directly.
-    
     Auto-selects provider:
-      - If ANTHROPIC_API_KEY set → AnthropicProvider
-      - If OPENAI_API_KEY set → OpenAIProvider  
-      - Otherwise → MockProvider (free, for development)
+      - ANTHROPIC_API_KEY set  → AnthropicProvider (Claude)
+      - OPENAI_API_KEY set     → OpenAIProvider (GPT-4o)
+      - Neither                → MockProvider (free, for dev)
+
+    Override with force_provider: "openai", "openai_mini", "anthropic", "mock"
     """
 
-    def __init__(self, force_mock: bool = False):
-        if force_mock:
+    def __init__(self, force_mock: bool = False, force_provider: str = None):
+        if force_mock or force_provider == "mock":
             self._provider = MockProvider()
-            logger.info("LLM: Using MOCK provider (forced)")
-        elif settings.anthropic_api_key and settings.anthropic_api_key != "your_anthropic_api_key_here":
-            self._provider = AnthropicProvider()
-            logger.info("LLM: Using Anthropic (Claude)")
-        elif settings.openai_api_key and settings.openai_api_key != "your_openai_api_key_here":
+            logger.info("LLM: Using MOCK provider")
+        elif force_provider == "openai_mini":
+            self._provider = OpenAIMiniProvider()
+            logger.info("LLM: Using OpenAI GPT-4o-mini")
+        elif force_provider == "openai":
             self._provider = OpenAIProvider()
-            logger.info("LLM: Using OpenAI (GPT-4)")
+            logger.info("LLM: Using OpenAI GPT-4o")
+        elif force_provider == "anthropic":
+            self._provider = AnthropicProvider()
+            logger.info("LLM: Using Anthropic Claude")
+        elif settings.openai_api_key and settings.openai_api_key not in ("", "your_openai_key_here"):
+            self._provider = OpenAIProvider()
+            logger.info("LLM: Using OpenAI GPT-4o")
+        elif settings.anthropic_api_key and settings.anthropic_api_key not in ("", "your_anthropic_api_key_here"):
+            self._provider = AnthropicProvider()
+            logger.info("LLM: Using Anthropic Claude")
         else:
             self._provider = MockProvider()
             logger.info("LLM: Using MOCK provider (no API keys set)")
 
-    async def generate(
-        self,
-        messages: List[Dict],
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-    ) -> LLMResponse:
-        start = time.time()
-        response = await self._provider.generate(messages, temperature, max_tokens)
-        elapsed_ms = int((time.time() - start) * 1000)
-
-        logger.debug(
-            f"LLM call | provider={response.provider} | "
-            f"tokens={response.total_tokens} | "
-            f"cost=${response.estimated_cost_usd():.4f} | "
-            f"time={elapsed_ms}ms"
-        )
-
-        return response
-    
     @async_retry(max_attempts=3, initial_delay=2.0)
     async def generate(
         self,
@@ -276,10 +242,8 @@ class LLMService:
         elapsed_ms = int((time.time() - start) * 1000)
 
         logger.debug(
-            f"LLM call | provider={response.provider} | "
-            f"tokens={response.total_tokens} | "
-            f"cost=${response.estimated_cost_usd():.4f} | "
+            f"LLM call | provider={response.provider} | model={response.model} | "
+            f"tokens={response.total_tokens} | cost=${response.estimated_cost_usd():.4f} | "
             f"time={elapsed_ms}ms"
         )
-
         return response
