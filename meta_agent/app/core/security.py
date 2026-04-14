@@ -1,10 +1,12 @@
+import hashlib
+import base64
 from datetime import datetime, timedelta
 from typing import Optional
 
+import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -12,22 +14,33 @@ from app.core.database import get_db
 from app.models.database import User
 from app.utils.logger import logger
 
-import logging
-logging.getLogger("passlib").setLevel(logging.ERROR)
-
 # ── Password hashing ─────────────────────────────────────────────────────────
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# passlib's bcrypt backend calls bcrypt.hashpw with a >72-byte test string
+# during initialisation (detect_wrap_bug). bcrypt 4.x raises ValueError for
+# that, crashing passlib before it can hash anything. We bypass passlib entirely
+# and call bcrypt directly. Passwords are SHA-256 pre-hashed first (44-byte
+# base64 output) so bcrypt's 72-byte limit is never reached — same approach
+# as Django's BCryptSHA256PasswordHasher.
 
 # ── OAuth2 scheme ─────────────────────────────────────────────────────────────
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
 
 
+def _prehash(password: str) -> bytes:
+    """Return SHA-256(password) as base64 bytes — always 44 bytes, safe for bcrypt."""
+    digest = hashlib.sha256(password.encode("utf-8")).digest()
+    return base64.b64encode(digest)
+
+
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(_prehash(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    try:
+        return bcrypt.checkpw(_prehash(plain), hashed.encode("utf-8"))
+    except Exception:
+        return False
 
 
 def create_access_token(user_id: int) -> str:

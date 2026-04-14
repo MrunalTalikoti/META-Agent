@@ -1,0 +1,125 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: #000;
+  color: #00ff41;
+  font-family: 'VT323', 'Courier New', monospace;
+  font-size: 18px;
+}
+
+/* ── Scrollbar ───────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: #001a00; }
+::-webkit-scrollbar-thumb { background: #003300; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #00ff41; }
+
+/* ── Selection ───────────────────────────────────────── */
+::selection { background: #00ff41; color: #000; }
+
+/* ── Glow ────────────────────────────────────────────── */
+.glow {
+  text-shadow: 0 0 8px #00ff41, 0 0 16px #00cc33;
+}
+.glow-box {
+  box-shadow: 0 0 10px rgba(0,255,65,0.35), inset 0 0 10px rgba(0,255,65,0.05);
+}
+
+/* ── CRT scanlines overlay ───────────────────────────── */
+.crt::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 3px,
+    rgba(0,0,0,0.07) 3px,
+    rgba(0,0,0,0.07) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Pixel logo ──────────────────────────────────────── */
+.logo-pixel {
+  font-family: 'Press Start 2P', monospace;
+  color: #00ff41;
+  text-shadow:
+    0 0  7px #00ff41,
+    0 0 14px #00ff41,
+    0 0 28px #00cc33,
+    0 0 56px #004d14;
+  line-height: 1.8;
+  letter-spacing: 0.05em;
+}
+
+/* ── Blinking cursor ─────────────────────────────────── */
+.cursor::after {
+  content: '█';
+  display: inline-block;
+  animation: blink 1s step-end infinite;
+  color: #00ff41;
+  margin-left: 2px;
+}
+
+/* ── Terminal bracket button ─────────────────────────── */
+.tbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #00ff41;
+  padding: 2px 14px;
+  font-family: 'VT323', monospace;
+  font-size: 1.15rem;
+  color: #00ff41;
+  background: transparent;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+  transition: background 0.08s, color 0.08s;
+  white-space: nowrap;
+  user-select: none;
+}
+.tbtn:hover { background: #00ff41; color: #000; }
+.tbtn:disabled { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+.tbtn.active  { background: #00ff41; color: #000; }
+
+/* ── Terminal text input ─────────────────────────────── */
+.tinput {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #003300;
+  color: #00ff41;
+  font-family: 'VT323', monospace;
+  font-size: 1.2rem;
+  outline: none;
+  padding: 3px 0;
+}
+.tinput:focus { border-bottom-color: #00ff41; }
+.tinput::placeholder { color: #004d14; }
+
+/* ── Code block ──────────────────────────────────────── */
+.code-block {
+  background: #001a00;
+  border: 1px solid #003300;
+  padding: 14px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  color: #00cc33;
+  border-radius: 2px;
+}
+
+/* ── Task status ─────────────────────────────────────── */
+.s-pending     { color: #004d14; }
+.s-in_progress { color: #00ff41; }
+.s-completed   { color: #00ff41; }
+.s-failed      { color: #ff4444; }
