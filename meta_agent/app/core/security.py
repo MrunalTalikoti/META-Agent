@@ -13,12 +13,7 @@ from app.models.database import User
 from app.utils.logger import logger
 
 import logging
-logging.getLogger("passlib").setLevel(logging.ERROR) 
-
-
-from app.core.config import settings
-from app.models.database import User
-from app.utils.logger import logger
+logging.getLogger("passlib").setLevel(logging.ERROR)
 
 # ── Password hashing ─────────────────────────────────────────────────────────
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

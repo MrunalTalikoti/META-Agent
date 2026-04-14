@@ -17,6 +17,7 @@ from app.agents.security_auditor import SecurityAuditorAgent
 from app.agents.performance_optimizer import PerformanceOptimizerAgent
 from app.core.task_decomposer import TaskDecomposer, DecomposedTask
 from app.models.database import Task, TaskStatus, AgentType, Project
+from app.services.validation import ValidationOrchestrator
 from app.utils.logger import logger
 
 TASK_TIMEOUT_SECONDS = 120  # Per-task LLM timeout
@@ -42,12 +43,19 @@ _AGENT_TYPE_MAP = {
     "testing_agent":         AgentType.TESTING_AGENT,
     "documentation_agent":   AgentType.DOCUMENTATION_AGENT,
     "requirements_gatherer": AgentType.REQUIREMENTS_GATHERER,
-    # These three reuse CODE_GENERATOR enum value as DB enum wasn't extended
-    "frontend_generator":    AgentType.CODE_GENERATOR,
-    "devops":                AgentType.CODE_GENERATOR,
-    "security_auditor":      AgentType.CODE_GENERATOR,
-    "performance_optimizer": AgentType.CODE_GENERATOR,
+    "frontend_generator":    AgentType.FRONTEND_GENERATOR,
+    "devops":                AgentType.DEVOPS,
+    "security_auditor":      AgentType.SECURITY_AUDITOR,
+    "performance_optimizer": AgentType.PERFORMANCE_OPTIMIZER,
 }
+
+# Agents whose output is worth validating (syntax + quality check)
+_VALIDATE_AGENTS = {
+    "code_generator", "api_designer", "database_schema",
+    "testing_agent", "frontend_generator",
+}
+
+_validator = ValidationOrchestrator()
 
 
 class OrchestratorResult:
@@ -219,8 +227,20 @@ class MetaAgentOrchestrator:
 
             if result.success:
                 db_task.status = TaskStatus.COMPLETED
-                db_task.output_data = result.output
                 db_task.completed_at = datetime.utcnow()
+
+                if subtask.agent in _VALIDATE_AGENTS:
+                    try:
+                        report = await _validator.validate(
+                            original_request=subtask.description,
+                            agent_name=subtask.agent,
+                            output=result.output,
+                        )
+                        result.output["_validation"] = report.to_dict()
+                    except Exception as ve:
+                        logger.warning(f"Validation skipped for task {subtask.id}: {ve}")
+
+                db_task.output_data = result.output
                 logger.info(f"✓ Task {subtask.id} ({subtask.agent}) completed")
             else:
                 db_task.status = TaskStatus.FAILED

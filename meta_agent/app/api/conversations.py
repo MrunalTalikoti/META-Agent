@@ -1,8 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import asyncio
+import json
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from pydantic import BaseModel, field_validator
-from typing import Optional, List
+from typing import AsyncGenerator, Optional, List
 
 from app.core.database import get_db
 from app.core.security import get_current_user
@@ -338,6 +342,8 @@ async def get_conversation(
 @router.get("/", response_model=List[ConversationResponse])
 async def list_conversations(
     project_id: Optional[int] = None,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -350,7 +356,90 @@ async def list_conversations(
         if not project:
             raise HTTPException(404, "Project not found")
         query = query.filter(Conversation.project_id == project_id)
-    return query.order_by(Conversation.created_at.desc()).all()
+    offset = (page - 1) * limit
+    return query.order_by(Conversation.created_at.desc()).offset(offset).limit(limit).all()
+
+
+@router.get("/{conversation_id}/stream")
+async def stream_conversation_progress(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    SSE endpoint — streams task-level progress events while a conversation is
+    executing.  Closes automatically when the conversation reaches COMPLETED.
+
+    Event format (text/event-stream):
+        data: {"type": "task_update", "task_id": 1, "status": "in_progress", "agent": "code_generator"}
+        data: {"type": "conversation_status", "status": "completed"}
+        data: {"type": "done"}
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.user_id == current_user.id,
+    ).first()
+    if not conversation:
+        raise HTTPException(404, "Conversation not found")
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        seen_task_states: dict = {}
+        poll_interval = 1.0  # seconds
+        max_polls = 120      # 2-minute hard cap
+
+        for _ in range(max_polls):
+            # Refresh conversation and its project tasks from DB
+            db.expire_all()
+            conv = db.query(Conversation).filter(
+                Conversation.id == conversation_id
+            ).first()
+            if not conv:
+                break
+
+            tasks = (
+                db.query(Task)
+                .filter(Task.project_id == conv.project_id)
+                .order_by(Task.execution_order)
+                .all()
+            )
+
+            for task in tasks:
+                current_status = task.status.value
+                if seen_task_states.get(task.id) != current_status:
+                    seen_task_states[task.id] = current_status
+                    event = json.dumps({
+                        "type": "task_update",
+                        "task_id": task.id,
+                        "title": task.title,
+                        "agent": task.agent_type.value,
+                        "status": current_status,
+                    })
+                    yield f"data: {event}\n\n"
+
+            # Emit conversation status on each change
+            conv_status = conv.status.value
+            status_event = json.dumps({
+                "type": "conversation_status",
+                "status": conv_status,
+            })
+            yield f"data: {status_event}\n\n"
+
+            if conv.status == ConversationStatus.COMPLETED:
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                break
+
+            await asyncio.sleep(poll_interval)
+        else:
+            yield f"data: {json.dumps({'type': 'timeout'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)

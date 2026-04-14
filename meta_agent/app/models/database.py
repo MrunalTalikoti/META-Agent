@@ -29,6 +29,10 @@ class AgentType(enum.Enum):
     TESTING_AGENT = "testing_agent"
     DOCUMENTATION_AGENT = "documentation_agent"
     REQUIREMENTS_GATHERER = "requirements_gatherer"
+    FRONTEND_GENERATOR = "frontend_generator"
+    DEVOPS = "devops"
+    SECURITY_AUDITOR = "security_auditor"
+    PERFORMANCE_OPTIMIZER = "performance_optimizer"
 
 
 class ExecutionMode(enum.Enum):

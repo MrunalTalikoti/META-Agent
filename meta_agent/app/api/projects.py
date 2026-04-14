@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -48,10 +48,20 @@ async def create_project(
 
 @router.get("/", response_model=List[ProjectResponse])
 async def list_projects(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    return db.query(Project).filter(Project.user_id == current_user.id).all()
+    offset = (page - 1) * limit
+    return (
+        db.query(Project)
+        .filter(Project.user_id == current_user.id)
+        .order_by(Project.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
