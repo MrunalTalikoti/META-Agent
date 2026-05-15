@@ -252,6 +252,14 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 The API is now live at `http://localhost:8000`.
 Interactive docs: `http://localhost:8000/docs`
 
+### 8. Start Frontend 
+```bash
+
+npm install
+npm run dev
+
+```
+
 ---
 
 ## API Reference
