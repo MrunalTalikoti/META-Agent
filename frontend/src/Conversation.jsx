@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import Layout from './Layout';
 import ResultsPanel from './ResultsPanel';
 import ProgressTracker from './ProgressTracker';
+import FileBrowser from './FileBrowser';
 import { api, streamConversation } from './api';
 
 // ── Message bubble ────────────────────────────────────────────────────────────
@@ -20,6 +21,39 @@ function Bubble({ msg }) {
   );
 }
 
+// ── Requirements panel (hardcore mode) ───────────────────────────────────────
+function RequirementsPanel({ requirements }) {
+  const [open, setOpen] = useState(false);
+  if (!requirements || Object.keys(requirements).length === 0) return null;
+
+  const entries = Object.entries(requirements).filter(([, v]) => v);
+
+  return (
+    <div className="shrink-0 border-b border-g-border bg-g-dark">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-g-dim hover:text-g-bright transition-colors"
+      >
+        <span className="text-g-bright">{'>'}</span>
+        <span>gathered requirements ({entries.length} items)</span>
+        <span className="ml-auto">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="px-4 pb-3 space-y-1">
+          {entries.map(([k, v]) => (
+            <div key={k} className="flex gap-2 text-sm">
+              <span className="text-g-dim shrink-0">{k.replace(/_/g, ' ')}:</span>
+              <span className="text-g-bright break-words">
+                {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function Conversation() {
   const { id }                    = useParams();
@@ -28,6 +62,8 @@ export default function Conversation() {
   const [sending, setSending]     = useState(false);
   const [tasks, setTasks]         = useState([]);
   const [streaming, setStreaming] = useState(false);
+  const [showFiles, setShowFiles] = useState(false);
+  const [deleting, setDeleting]   = useState(false);
   const streamGuard               = useRef(false);
   const endRef                    = useRef(null);
   const navigate                  = useNavigate();
@@ -36,7 +72,6 @@ export default function Conversation() {
   useEffect(() => {
     api.getConversation(id).then(data => {
       setConv(data);
-      // If already executing when we land here, start SSE immediately
       if (data.status === 'executing') startStream();
     }).catch(() => navigate('/'));
   }, [id]);
@@ -73,7 +108,6 @@ export default function Conversation() {
         }
       }
     } catch { /* SSE ended */ }
-    // Fallback: refresh conversation
     const updated = await api.getConversation(id).catch(() => null);
     if (updated) setConv(updated);
     setStreaming(false);
@@ -93,6 +127,19 @@ export default function Conversation() {
       console.error(err);
     } finally {
       setSending(false);
+    }
+  };
+
+  // ── Delete conversation ───────────────────────────────────────────────────
+  const deleteConv = async () => {
+    if (!window.confirm('Delete this session? This cannot be undone.')) return;
+    setDeleting(true);
+    try {
+      await api.deleteConversation(id);
+      navigate('/');
+    } catch (err) {
+      alert(err.message);
+      setDeleting(false);
     }
   };
 
@@ -120,6 +167,13 @@ export default function Conversation() {
     ? `session: ${id} | ${conv.mode} | ${conv.status.replace(/_/g, ' ')}`
     : `session: ${id} | loading...`;
 
+  const inputPlaceholder =
+    isGathering ? 'Answer the question above...' :
+    isReady     ? 'Type "execute" to run, or describe changes...' :
+    isCompleted ? 'Ask to refine or modify the output...' :
+    isRefining  ? 'Refinement running...' :
+                  'Type a message...';
+
   // ── Render ────────────────────────────────────────────────────────────────
   if (!conv) {
     return (
@@ -136,26 +190,52 @@ export default function Conversation() {
       <div className="flex-1 flex flex-col overflow-hidden">
 
         {/* Header bar */}
-        <div className="shrink-0 border-b border-g-border px-4 py-2 flex items-center gap-4 flex-wrap">
+        <div className="shrink-0 border-b border-g-border px-4 py-2 flex items-center gap-3 flex-wrap">
           <button className="tbtn" onClick={() => navigate('/')}>← back</button>
-          <span className="text-g-dim text-base">
-            session_{id}
-          </span>
+          <span className="text-g-dim text-base">session_{id}</span>
           <span className="border border-g-border px-3 py-0.5 text-sm">
             {conv.mode.toUpperCase()}
           </span>
           <span className={`border px-3 py-0.5 text-sm ${
-            isCompleted  ? 'border-g-bright text-g-bright'   :
-            isExecuting  ? 'border-yellow-600 text-yellow-400 animate-pulse' :
-            isGathering  ? 'border-g-border text-g-dim'      :
-                           'border-g-border text-g-dim'
+            isCompleted ? 'border-g-bright text-g-bright'          :
+            isExecuting ? 'border-yellow-600 text-yellow-400 animate-pulse' :
+            isGathering ? 'border-g-border text-g-dim'             :
+                          'border-g-border text-g-dim'
           }`}>
             {conv.status.replace(/_/g, ' ').toUpperCase()}
           </span>
+          <div className="ml-auto flex items-center gap-2">
+            {isCompleted && result && (
+              <button className="tbtn text-sm" onClick={() => setShowFiles(true)}>
+                FILES
+              </button>
+            )}
+            <button
+              className="tbtn text-sm"
+              onClick={deleteConv}
+              disabled={deleting || isExecuting}
+              title="Delete this session"
+            >
+              {deleting ? 'DELETING...' : 'DELETE'}
+            </button>
+          </div>
         </div>
 
         {/* Body */}
         <div className="flex-1 flex flex-col overflow-hidden">
+
+          {/* Requirements summary (hardcore mode, while gathering or ready) */}
+          {conv.mode === 'hardcore' && (isGathering || isReady) && conv.gathered_requirements && (
+            <RequirementsPanel requirements={conv.gathered_requirements} />
+          )}
+
+          {/* Final spec banner (when ready to execute) */}
+          {isReady && conv.final_prompt && (
+            <div className="shrink-0 border-b border-g-border px-4 py-2 bg-g-dark text-sm text-g-dim">
+              <span className="text-g-bright">{'>'} final spec ready</span>
+              <span className="ml-2">— type "execute" to build or ask for changes</span>
+            </div>
+          )}
 
           {/* Progress tracker (visible while executing) */}
           {(isExecuting || tasks.length > 0) && (
@@ -164,10 +244,13 @@ export default function Conversation() {
 
           {/* Results panel (completed and has output) */}
           {isCompleted && result && (
-            <ResultsPanel result={result} />
+            <ResultsPanel
+              result={result}
+              onShowFiles={() => setShowFiles(true)}
+            />
           )}
 
-          {/* Chat messages (always show for HARDCORE; show while normal is pending/gathering) */}
+          {/* Chat messages */}
           {(!isCompleted || !result) && (
             <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
               {conv.messages.map((msg, i) => (
@@ -182,7 +265,7 @@ export default function Conversation() {
             </div>
           )}
 
-          {/* Show messages alongside results for HARDCORE completed */}
+          {/* Show recent messages alongside results for hardcore completed */}
           {isCompleted && result && conv.mode === 'hardcore' && (
             <div className="shrink-0 border-t border-g-border px-4 py-2 max-h-32 overflow-y-auto">
               {conv.messages.slice(-3).map((msg, i) => (
@@ -201,17 +284,12 @@ export default function Conversation() {
               </span>
               <textarea
                 className="flex-1 bg-transparent border-none outline-none text-g-bright font-term text-lg resize-none overflow-y-auto"
-                placeholder={
-                  isGathering ? 'Answer the question above...' :
-                  isReady     ? 'Type "execute" to run, or describe changes...' :
-                  isCompleted ? 'Ask to refine or modify...' :
-                                'Type a message...'
-                }
+                placeholder={inputPlaceholder}
                 rows={2}
                 value={message}
                 onChange={e => setMessage(e.target.value)}
                 onKeyDown={handleKey}
-                disabled={sending}
+                disabled={sending || isRefining}
               />
             </div>
             <div className="flex items-center justify-between mt-2">
@@ -220,10 +298,15 @@ export default function Conversation() {
                   {'>'} requirements gathered — type "execute" to build
                 </span>
               )}
+              {isRefining && (
+                <span className="text-g-dim text-sm animate-pulse">
+                  {'>'} refining...
+                </span>
+              )}
               <button
                 className="tbtn ml-auto"
                 onClick={send}
-                disabled={sending || !message.trim()}
+                disabled={sending || !message.trim() || isRefining}
               >
                 {sending ? 'SENDING...' : 'SEND'}
               </button>
@@ -238,6 +321,15 @@ export default function Conversation() {
           </div>
         )}
       </div>
+
+      {/* File browser modal */}
+      {showFiles && conv.project_id && (
+        <FileBrowser
+          projectId={conv.project_id}
+          projectName={`session_${id}`}
+          onClose={() => setShowFiles(false)}
+        />
+      )}
     </Layout>
   );
 }

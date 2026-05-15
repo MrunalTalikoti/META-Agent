@@ -4,23 +4,39 @@ import { api } from './api';
 const AuthCtx = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser]     = useState(null);
+  const [user, setUser]       = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Validate stored token on boot
+  // Validate stored token on boot and load full user profile
   useEffect(() => {
     const token = localStorage.getItem('ma_token');
     if (!token) { setLoading(false); return; }
     api.getMetrics()
-      .then(m => setUser({ id: m.user_id, tier: m.tier }))
-      .catch(() => localStorage.removeItem('ma_token'))
+      .then(m => setUser({
+        id:             m.user_id,
+        tier:           m.tier,
+        email:          localStorage.getItem('ma_email') ?? '',
+        requestsToday:  m.requests_today,
+      }))
+      .catch(() => {
+        localStorage.removeItem('ma_token');
+        localStorage.removeItem('ma_email');
+      })
       .finally(() => setLoading(false));
   }, []);
 
   const login = async (email, password) => {
     const data = await api.login(email, password);
     localStorage.setItem('ma_token', data.access_token);
-    setUser({ email });
+    localStorage.setItem('ma_email', email);
+    // Fetch full profile immediately
+    const m = await api.getMetrics().catch(() => null);
+    setUser({
+      id:             m?.user_id ?? null,
+      tier:           m?.tier ?? 'free',
+      email,
+      requestsToday:  m?.requests_today ?? 0,
+    });
   };
 
   const register = async (email, password) => {
@@ -30,6 +46,7 @@ export function AuthProvider({ children }) {
 
   const logout = () => {
     localStorage.removeItem('ma_token');
+    localStorage.removeItem('ma_email');
     setUser(null);
   };
 

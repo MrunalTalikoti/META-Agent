@@ -61,6 +61,7 @@ class MessageSend(BaseModel):
 
 class ConversationResponse(BaseModel):
     id: int
+    project_id: int
     mode: str
     status: str
     messages: List[dict]

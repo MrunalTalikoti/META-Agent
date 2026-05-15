@@ -65,11 +65,18 @@ export const api = {
   // ── Metrics ───────────────────────────────────────────
   getMetrics: () => req('/api/metrics'),
 
-  // ── Export ────────────────────────────────────────────
+  // ── Export & Files ────────────────────────────────────────
   exportProject: (projectId) =>
     fetch(`/api/projects/${projectId}/export`, {
       headers: { Authorization: `Bearer ${getToken()}` },
     }),
+
+  listProjectFiles: (projectId) =>
+    req(`/api/projects/${projectId}/files`),
+
+  // ── Task detail ───────────────────────────────────────────
+  getTask: (taskId) =>
+    req(`/api/agents/tasks/${taskId}`),
 };
 
 // SSE streaming using fetch (EventSource doesn't support custom headers)

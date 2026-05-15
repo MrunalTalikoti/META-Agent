@@ -3,13 +3,24 @@ import { useNavigate } from 'react-router-dom';
 import { api } from './api';
 import { useAuth } from './AuthContext';
 
+const TIER_COLOR = {
+  free:       'text-g-dim',
+  pro:        'text-yellow-400',
+  enterprise: 'text-g-bright',
+};
+
+function firstUserMessage(conv) {
+  const msg = (conv.messages ?? []).find(m => m.role === 'user');
+  return msg?.content ?? `${conv.mode}_${conv.id}`;
+}
+
 export default function Sidebar({ onNewSession, refreshKey }) {
-  const [projects, setProjects]       = useState([]);
-  const [expanded, setExpanded]       = useState(null); // project id
-  const [convs, setConvs]             = useState({});   // { [projectId]: [...] }
-  const [search, setSearch]           = useState('');
-  const { logout }                    = useAuth();
-  const navigate                      = useNavigate();
+  const [projects, setProjects]   = useState([]);
+  const [expanded, setExpanded]   = useState(null);
+  const [convs, setConvs]         = useState({});
+  const [search, setSearch]       = useState('');
+  const { user, logout }          = useAuth();
+  const navigate                  = useNavigate();
 
   useEffect(() => {
     api.getProjects().then(setProjects).catch(() => {});
@@ -24,6 +35,16 @@ export default function Sidebar({ onNewSession, refreshKey }) {
     }
   };
 
+  const deleteConv = async (e, convId, projId) => {
+    e.stopPropagation();
+    if (!window.confirm('Delete this session?')) return;
+    await api.deleteConversation(convId).catch(() => {});
+    setConvs(prev => ({
+      ...prev,
+      [projId]: (prev[projId] ?? []).filter(c => c.id !== convId),
+    }));
+  };
+
   const filteredProjects = search
     ? projects.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
     : projects;
@@ -36,6 +57,7 @@ export default function Sidebar({ onNewSession, refreshKey }) {
 
   return (
     <aside className="flex flex-col h-full bg-black border-r border-g-border font-term select-none w-64 shrink-0">
+
       {/* New Session */}
       <div className="p-3 border-b border-g-border">
         <button className="tbtn w-full" onClick={onNewSession}>
@@ -49,7 +71,7 @@ export default function Sidebar({ onNewSession, refreshKey }) {
           <span className="text-g-dim text-sm">[SEARCH]</span>
           <input
             className="tinput text-base flex-1"
-            placeholder="find session"
+            placeholder="find project"
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
@@ -70,29 +92,43 @@ export default function Sidebar({ onNewSession, refreshKey }) {
               onClick={() => toggle(proj)}
               className="w-full text-left flex items-center gap-2 px-2 py-0.5 hover:bg-g-dark text-g-bright text-base transition-colors"
             >
-              <span className="text-g-dim">{expanded === proj.id ? '▼' : '>'}</span>
-              <span className="truncate">
+              <span className="text-g-dim shrink-0">{expanded === proj.id ? '▼' : '>'}</span>
+              <span className="truncate flex-1">
                 {proj.name.toLowerCase().replace(/\s+/g, '_')}
               </span>
+              {convs[proj.id] && (
+                <span className="text-g-dim text-xs shrink-0">
+                  ({convs[proj.id].length})
+                </span>
+              )}
             </button>
 
             {expanded === proj.id && (
               <div className="pl-5 space-y-0.5 mt-0.5">
-                {(convs[proj.id] || []).map(c => (
-                  <button
-                    key={c.id}
-                    onClick={() => navigate(`/c/${c.id}`)}
-                    className="w-full text-left flex items-center gap-2 px-2 py-0.5 text-g-dim hover:text-g-bright hover:bg-g-dark text-sm transition-colors"
-                  >
-                    {statusDot(c.status)}
-                    <span className="truncate">
-                      {c.mode}_{c.id}
-                    </span>
-                  </button>
-                ))}
                 {(convs[proj.id] || []).length === 0 && (
                   <div className="text-g-dim text-xs px-2 py-1">no sessions</div>
                 )}
+                {(convs[proj.id] || []).map(c => {
+                  const label = firstUserMessage(c);
+                  return (
+                    <div key={c.id} className="flex items-center group">
+                      <button
+                        onClick={() => navigate(`/c/${c.id}`)}
+                        className="flex-1 text-left flex items-center gap-2 px-2 py-0.5 text-g-dim hover:text-g-bright hover:bg-g-dark text-sm transition-colors min-w-0"
+                      >
+                        <span className="shrink-0">{statusDot(c.status)}</span>
+                        <span className="truncate">{label.slice(0, 28)}{label.length > 28 ? '…' : ''}</span>
+                      </button>
+                      <button
+                        onClick={e => deleteConv(e, c.id, proj.id)}
+                        className="hidden group-hover:block shrink-0 text-g-dim hover:text-red-400 text-xs px-1.5 py-0.5 transition-colors"
+                        title="Delete session"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -115,12 +151,28 @@ export default function Sidebar({ onNewSession, refreshKey }) {
           <span>{'>'}</span>
           <span>logout</span>
         </button>
-        <div className="pt-2">
-          <button className="tbtn w-full opacity-40 cursor-not-allowed" disabled>
-            LIGHT_MODE
-          </button>
-        </div>
       </div>
+
+      {/* User info strip */}
+      {user && (
+        <div className="border-t border-g-border px-3 py-2 text-xs space-y-0.5">
+          {user.email && (
+            <div className="text-g-dim truncate" title={user.email}>
+              {user.email}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <span className={TIER_COLOR[user.tier] ?? 'text-g-dim'}>
+              {(user.tier ?? 'free').toUpperCase()}
+            </span>
+            {user.requestsToday != null && (
+              <span className="text-g-dim">
+                · {user.requestsToday} req today
+              </span>
+            )}
+          </div>
+        </div>
+      )}
     </aside>
   );
 }
