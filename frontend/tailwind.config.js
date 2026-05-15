@@ -5,16 +5,17 @@ export default {
     extend: {
       colors: {
         g: {
-          bright: '#00ff41',
-          med:    '#00cc33',
-          dim:    '#004d14',
-          dark:   '#001a00',
-          border: '#003300',
+          bright: '#ffffff',
+          med:    '#a0a0a0',
+          dim:    '#777777',
+          dark:   '#111111',
+          border: '#222222',
         },
       },
       fontFamily: {
-        term:  ['VT323', '"Courier New"', 'monospace'],
-        pixel: ['"Press Start 2P"', 'monospace'],
+        term:  ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+        pixel: ['Inter', 'sans-serif'],
+        mono:  ['"Courier New"', '"Monaco"', '"Menlo"', 'monospace'],
       },
       keyframes: {
         blink: {

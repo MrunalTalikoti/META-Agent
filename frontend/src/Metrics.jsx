@@ -3,16 +3,63 @@ import { useNavigate } from 'react-router-dom';
 import Layout from './Layout';
 import { api } from './api';
 
-function Bar({ value, max, color = 'bg-g-bright' }) {
+const DAILY_LIMITS = { free: 10, pro: 100, enterprise: 1000 };
+
+function Bar({ value, max, danger = false, warn = false }) {
   const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
+  const color = danger ? '#ff6b6b' : warn ? '#f5c518' : 'rgba(255,255,255,0.7)';
   return (
-    <div className="flex-1 h-2 bg-g-dark border border-g-border overflow-hidden">
-      <div className={`h-full ${color} transition-all duration-700`} style={{ width: `${pct}%` }} />
+    <div style={{ flex: 1, height: '2px', background: 'rgba(255,255,255,0.08)', borderRadius: '2px', overflow: 'hidden' }}>
+      <div style={{ height: '100%', width: `${pct}%`, background: color, transition: 'width 0.7s ease', borderRadius: '2px' }} />
     </div>
   );
 }
 
-const DAILY_LIMITS = { free: 10, pro: 100, enterprise: 1000 };
+function Section({ title, children }) {
+  return (
+    <div style={{ marginBottom: '32px' }}>
+      <div style={{
+        fontSize: '9px', fontWeight: 700, letterSpacing: '0.2em',
+        textTransform: 'uppercase', color: 'rgba(255,255,255,0.28)',
+        marginBottom: '12px', paddingBottom: '8px',
+        borderBottom: '1px solid rgba(255,255,255,0.07)',
+      }}>
+        {title}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value, accent }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.05)',
+    }}>
+      <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)', fontWeight: 400 }}>{label}</span>
+      <span style={{ fontSize: '13px', color: accent ?? 'rgba(255,255,255,0.85)', fontWeight: 500 }}>
+        {value ?? '—'}
+      </span>
+    </div>
+  );
+}
+
+function BarRow({ label, value, max, suffix, danger = false, warn = false }) {
+  return (
+    <div style={{ padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+        <span style={{ fontSize: '13px', color: 'rgba(255,255,255,0.45)' }}>{label}</span>
+        <span style={{ fontSize: '13px', fontWeight: 500, color: danger ? '#ff6b6b' : warn ? '#f5c518' : 'rgba(255,255,255,0.85)' }}>
+          {suffix ?? value}
+        </span>
+      </div>
+      <Bar value={value} max={max} danger={danger} warn={warn} />
+    </div>
+  );
+}
 
 export default function Metrics() {
   const [metrics, setMetrics] = useState(null);
@@ -20,140 +67,109 @@ export default function Metrics() {
   const navigate              = useNavigate();
 
   useEffect(() => {
-    api.getMetrics()
-      .then(setMetrics)
-      .catch(e => setError(e.message));
+    api.getMetrics().then(setMetrics).catch(e => setError(e.message));
   }, []);
 
-  const tier       = metrics?.tier ?? 'free';
-  const dayLimit   = DAILY_LIMITS[tier] ?? 10;
-  const reqToday   = metrics?.requests_today ?? 0;
-  const successRate = metrics?.tasks?.success_rate ?? 0;
-  const totalTasks = metrics?.tasks?.total ?? 0;
-  const doneTasks  = metrics?.tasks?.completed ?? 0;
-  const cost       = metrics?.llm_usage?.estimated_cost_usd ?? 0;
+  const tier         = metrics?.tier ?? 'free';
+  const dayLimit     = DAILY_LIMITS[tier] ?? 10;
+  const reqToday     = metrics?.requests_today ?? 0;
+  const successRate  = metrics?.tasks?.success_rate ?? 0;
+  const totalTasks   = metrics?.tasks?.total ?? 0;
+  const doneTasks    = metrics?.tasks?.completed ?? 0;
+  const cost         = metrics?.llm_usage?.estimated_cost_usd ?? 0;
+
+  const tierColor =
+    tier === 'enterprise' ? '#fff' :
+    tier === 'pro'        ? '#f5c518' :
+    'rgba(255,255,255,0.4)';
 
   return (
-    <Layout status="metrics | api: ONLINE">
-      <div className="flex-1 overflow-y-auto p-6">
+    <Layout status="Usage Metrics — API Online">
+      <div style={{ flex: 1, overflowY: 'auto', padding: '48px 52px' }}>
 
-        {/* Header */}
-        <div className="flex items-center gap-4 mb-6">
-          <button className="tbtn" onClick={() => navigate('/')}>← back</button>
-          <span className="text-g-dim text-xl">// USAGE METRICS</span>
+        {/* Page header */}
+        <div style={{ marginBottom: '52px', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{
+              fontSize: '9px', fontWeight: 700, letterSpacing: '0.2em',
+              color: 'rgba(255,255,255,0.28)', textTransform: 'uppercase', marginBottom: '10px',
+            }}>
+              Meta-Agent
+            </div>
+            <div style={{ fontSize: 'clamp(2rem, 5vw, 4rem)', fontWeight: 100, letterSpacing: '-0.03em', lineHeight: 1 }}>
+              Usage Metrics
+            </div>
+          </div>
+          <button
+            className="tbtn"
+            onClick={() => navigate('/')}
+            style={{ alignSelf: 'flex-start', marginTop: '8px' }}
+          >
+            ← Dashboard
+          </button>
         </div>
 
-        {/* Loading */}
         {!metrics && !error && (
-          <div className="text-g-dim animate-pulse cursor text-xl">LOADING</div>
+          <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.3)', letterSpacing: '0.1em' }} className="animate-pulse">
+            Loading...
+          </div>
         )}
 
-        {/* Error */}
         {error && (
-          <div className="text-red-400 text-base">{'>'} ERROR: {error}</div>
+          <div style={{ color: '#ff6b6b', fontSize: '14px' }}>{error}</div>
         )}
 
         {metrics && (
-          <div className="space-y-6 max-w-xl">
+          <div style={{ maxWidth: '520px', display: 'flex', flexDirection: 'column' }}>
 
-            {/* Account */}
-            <div className="border border-g-border">
-              <div className="border-b border-g-border px-4 py-2 text-g-dim text-sm">
-                {'>'} account
-              </div>
-              <Row label="USER ID"  value={metrics.user_id} />
-              <Row label="TIER"     value={
-                <span className={
-                  tier === 'enterprise' ? 'text-g-bright' :
-                  tier === 'pro'        ? 'text-yellow-400' :
-                  'text-g-dim'
-                }>{tier.toUpperCase()}</span>
-              } />
-            </div>
+            <Section title="Account">
+              <Row label="User ID" value={metrics.user_id} />
+              <Row label="Tier" value={tier.toUpperCase()} accent={tierColor} />
+            </Section>
 
-            {/* Daily usage */}
-            <div className="border border-g-border">
-              <div className="border-b border-g-border px-4 py-2 text-g-dim text-sm">
-                {'>'} daily usage
-              </div>
+            <Section title="Daily Usage">
               <BarRow
-                label="REQUESTS TODAY"
+                label="Requests Today"
                 value={reqToday}
                 max={dayLimit}
-                suffix={`/ ${dayLimit}`}
-                color={reqToday >= dayLimit * 0.9 ? 'bg-red-500' : reqToday >= dayLimit * 0.6 ? 'bg-yellow-500' : 'bg-g-bright'}
+                suffix={`${reqToday} / ${dayLimit}`}
+                danger={reqToday >= dayLimit * 0.9}
+                warn={reqToday >= dayLimit * 0.6 && reqToday < dayLimit * 0.9}
               />
-            </div>
+            </Section>
 
-            {/* Tasks */}
-            <div className="border border-g-border">
-              <div className="border-b border-g-border px-4 py-2 text-g-dim text-sm">
-                {'>'} task stats
-              </div>
-              <Row label="TOTAL PROJECTS"  value={metrics.projects} />
-              <Row label="TOTAL TASKS"     value={totalTasks} />
+            <Section title="Tasks">
+              <Row label="Total Projects" value={metrics.projects} />
+              <Row label="Total Tasks"    value={totalTasks} />
               <BarRow
-                label="COMPLETED"
+                label="Completed"
                 value={doneTasks}
                 max={totalTasks || 1}
                 suffix={`${doneTasks} / ${totalTasks}`}
               />
               <BarRow
-                label="SUCCESS RATE"
+                label="Success Rate"
                 value={successRate}
                 max={100}
                 suffix={`${successRate}%`}
-                color={successRate >= 80 ? 'bg-g-bright' : successRate >= 50 ? 'bg-yellow-500' : 'bg-red-500'}
+                danger={successRate < 50}
+                warn={successRate >= 50 && successRate < 80}
               />
-            </div>
+            </Section>
 
-            {/* LLM usage */}
-            <div className="border border-g-border">
-              <div className="border-b border-g-border px-4 py-2 text-g-dim text-sm">
-                {'>'} llm usage
-              </div>
-              <Row label="LLM CALLS"   value={metrics.llm_usage?.total_calls} />
-              <Row label="TOKENS USED" value={metrics.llm_usage?.total_tokens?.toLocaleString()} />
+            <Section title="LLM Usage">
+              <Row label="Total Calls"     value={metrics.llm_usage?.total_calls} />
+              <Row label="Tokens Used"     value={metrics.llm_usage?.total_tokens?.toLocaleString()} />
               <Row
-                label="EST. COST (USD)"
-                value={
-                  <span className={cost > 1 ? 'text-yellow-400' : 'text-g-bright'}>
-                    ${cost}
-                  </span>
-                }
+                label="Estimated Cost"
+                value={`$${cost}`}
+                accent={cost > 1 ? '#f5c518' : 'rgba(255,255,255,0.85)'}
               />
-            </div>
+            </Section>
 
           </div>
         )}
       </div>
     </Layout>
-  );
-}
-
-function Row({ label, value }) {
-  return (
-    <div className="flex border-b border-g-border last:border-b-0 hover:bg-g-dark transition-colors">
-      <div className="w-52 px-4 py-2 text-g-dim text-base border-r border-g-border shrink-0">
-        {label}
-      </div>
-      <div className="px-4 py-2 text-g-bright text-base flex-1">
-        {value ?? '—'}
-      </div>
-    </div>
-  );
-}
-
-function BarRow({ label, value, max, suffix, color = 'bg-g-bright' }) {
-  return (
-    <div className="flex items-center border-b border-g-border last:border-b-0 hover:bg-g-dark transition-colors">
-      <div className="w-52 px-4 py-2 text-g-dim text-base border-r border-g-border shrink-0">
-        {label}
-      </div>
-      <div className="px-4 py-2 flex-1 flex items-center gap-3">
-        <Bar value={value} max={max} color={color} />
-        <span className="text-g-bright text-sm shrink-0">{suffix ?? value}</span>
-      </div>
-    </div>
   );
 }

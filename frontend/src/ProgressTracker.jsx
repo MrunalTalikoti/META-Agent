@@ -4,14 +4,42 @@ const AGENT_LABELS = {
   code_generator:        'Code Generator',
   api_designer:          'API Designer',
   database_schema:       'Database Schema',
-  testing_agent:         'Testing Agent',
+  testing_agent:         'Testing',
   documentation_agent:   'Documentation',
-  requirements_gatherer: 'Requirements Gatherer',
-  frontend_generator:    'Frontend Generator',
+  requirements_gatherer: 'Requirements',
+  frontend_generator:    'Frontend',
   devops:                'DevOps',
-  security_auditor:      'Security Auditor',
-  performance_optimizer: 'Performance Optimizer',
+  security_auditor:      'Security Audit',
+  performance_optimizer: 'Performance',
 };
+
+function AgentIcon({ status }) {
+  if (status === 'completed')
+    return <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '11px', width: '14px', textAlign: 'center' }}>✓</span>;
+  if (status === 'failed')
+    return <span style={{ color: '#ff6b6b', fontSize: '11px', width: '14px', textAlign: 'center' }}>✕</span>;
+  if (status === 'in_progress')
+    return (
+      <span className="animate-blink" style={{
+        display: 'inline-block', width: '6px', height: '6px',
+        borderRadius: '50%', background: '#fff', margin: '0 4px',
+      }} />
+    );
+  return (
+    <span style={{
+      display: 'inline-block', width: '6px', height: '6px',
+      borderRadius: '50%', border: '1px solid rgba(255,255,255,0.2)',
+      margin: '0 4px',
+    }} />
+  );
+}
+
+function statusColor(status) {
+  if (status === 'in_progress') return '#fff';
+  if (status === 'completed')   return 'rgba(255,255,255,0.55)';
+  if (status === 'failed')      return '#ff6b6b';
+  return 'rgba(255,255,255,0.22)';
+}
 
 export default function ProgressTracker({ tasks }) {
   const [expanded, setExpanded] = useState(null);
@@ -20,79 +48,85 @@ export default function ProgressTracker({ tasks }) {
   const done  = tasks.filter(t => t.status === 'completed' || t.status === 'failed').length;
   const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
 
-  const icon = (status) => {
-    switch (status) {
-      case 'completed':   return <span className="text-g-bright">✓</span>;
-      case 'failed':      return <span className="text-red-400">✗</span>;
-      case 'in_progress': return <span className="text-g-bright animate-blink">▶</span>;
-      default:            return <span className="text-g-dim">○</span>;
-    }
-  };
-
-  const rowColor = (status) => {
-    switch (status) {
-      case 'in_progress': return 'text-g-bright';
-      case 'completed':   return 'text-g-bright';
-      case 'failed':      return 'text-red-400';
-      default:            return 'text-g-dim';
-    }
-  };
-
-  const statusLabel = (status) => {
-    switch (status) {
-      case 'in_progress': return <span className="text-g-bright animate-pulse">running</span>;
-      case 'completed':   return <span className="text-g-bright">done</span>;
-      case 'failed':      return <span className="text-red-400">failed</span>;
-      default:            return <span className="text-g-dim">pending</span>;
-    }
-  };
-
   return (
-    <div className="border-b border-g-border px-4 py-3 shrink-0">
+    <div style={{
+      flexShrink: 0,
+      borderBottom: '1px solid rgba(255,255,255,0.07)',
+      background: '#080808',
+      padding: '14px 20px',
+    }}>
       {/* Header + progress bar */}
-      <div className="flex items-center gap-3 mb-2">
-        <span className="text-g-dim text-base shrink-0">{'>'} AGENT PIPELINE</span>
-        <span className="text-g-dim text-sm shrink-0">{done}/{total}</span>
-        <div className="flex-1 h-1 bg-g-dark border border-g-border overflow-hidden">
-          <div
-            className="h-full bg-g-bright transition-all duration-700"
-            style={{ width: `${pct}%` }}
-          />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+        <span style={{
+          fontSize: '9px', fontWeight: 700, letterSpacing: '0.18em',
+          textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', flexShrink: 0,
+        }}>
+          Agent Pipeline
+        </span>
+        <div style={{
+          flex: 1, height: '1px', background: 'rgba(255,255,255,0.06)', borderRadius: '1px', overflow: 'hidden',
+        }}>
+          <div style={{
+            height: '100%', background: '#fff', width: `${pct}%`,
+            transition: 'width 0.7s ease', borderRadius: '1px',
+          }} />
         </div>
-        <span className="text-g-dim text-sm shrink-0">{pct}%</span>
+        <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)', flexShrink: 0 }}>
+          {done}/{total}
+        </span>
       </div>
 
       {/* Task rows */}
-      <div className="space-y-0.5">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
         {tasks.map((t, i) => {
-          const label = AGENT_LABELS[t.agent] ?? (t.agent || t.title || 'task');
+          const label     = AGENT_LABELS[t.agent] ?? (t.agent || t.title || 'Task');
           const hasDetail = t.description || t.error_message;
 
           return (
             <div key={t.task_id ?? i}>
               <button
                 onClick={() => hasDetail && setExpanded(expanded === i ? null : i)}
-                className={`w-full flex items-center gap-3 text-base font-term px-1 py-0.5 transition-colors ${hasDetail ? 'hover:bg-g-dark cursor-pointer' : 'cursor-default'}`}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: '10px',
+                  padding: '5px 0', background: 'none', border: 'none', cursor: hasDetail ? 'pointer' : 'default',
+                  fontFamily: 'inherit', textAlign: 'left',
+                }}
               >
-                <span className="w-4 text-center shrink-0">{icon(t.status)}</span>
-                <span className={rowColor(t.status)}>
-                  {label.replace(/_/g, ' ')}
+                <AgentIcon status={t.status} />
+                <span style={{ flex: 1, fontSize: '12px', fontWeight: 500, color: statusColor(t.status) }}>
+                  {label}
                 </span>
-                <span className="ml-auto shrink-0 text-sm">{statusLabel(t.status)}</span>
+                <span style={{
+                  fontSize: '10px', fontWeight: 600, letterSpacing: '0.08em', flexShrink: 0,
+                  color: t.status === 'in_progress' ? '#fff'    :
+                         t.status === 'completed'   ? 'rgba(255,255,255,0.4)' :
+                         t.status === 'failed'      ? '#ff6b6b' : 'rgba(255,255,255,0.18)',
+                }}>
+                  {t.status === 'in_progress' ? 'Running' :
+                   t.status === 'completed'   ? 'Done'    :
+                   t.status === 'failed'      ? 'Failed'  : 'Pending'}
+                </span>
                 {hasDetail && (
-                  <span className="text-g-dim text-xs w-4 text-center shrink-0">
+                  <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: '10px', width: '12px', textAlign: 'center' }}>
                     {expanded === i ? '▲' : '▼'}
                   </span>
                 )}
               </button>
 
               {expanded === i && (
-                <div className="ml-5 pl-3 border-l border-g-border py-1.5 mb-1 space-y-1 text-sm">
+                <div style={{
+                  marginLeft: '24px', paddingLeft: '12px',
+                  borderLeft: '1px solid rgba(255,255,255,0.08)',
+                  paddingTop: '4px', paddingBottom: '8px',
+                  display: 'flex', flexDirection: 'column', gap: '4px',
+                }}>
                   {t.description && (
-                    <div className="text-g-dim leading-snug">{t.description}</div>
+                    <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', lineHeight: '1.5' }}>
+                      {t.description}
+                    </div>
                   )}
                   {t.error_message && (
-                    <div className="text-red-400">✗ {t.error_message}</div>
+                    <div style={{ fontSize: '12px', color: '#ff6b6b' }}>✕ {t.error_message}</div>
                   )}
                 </div>
               )}

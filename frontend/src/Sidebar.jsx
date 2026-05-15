@@ -3,24 +3,32 @@ import { useNavigate } from 'react-router-dom';
 import { api } from './api';
 import { useAuth } from './AuthContext';
 
-const TIER_COLOR = {
-  free:       'text-g-dim',
-  pro:        'text-yellow-400',
-  enterprise: 'text-g-bright',
+const TIER_BADGE = {
+  free:       { label: 'FREE',       color: 'rgba(255,255,255,0.35)' },
+  pro:        { label: 'PRO',        color: '#f5c518'                },
+  enterprise: { label: 'ENTERPRISE', color: '#fff'                   },
 };
 
 function firstUserMessage(conv) {
   const msg = (conv.messages ?? []).find(m => m.role === 'user');
-  return msg?.content ?? `${conv.mode}_${conv.id}`;
+  return msg?.content ?? `session_${conv.id}`;
+}
+
+function StatusDot({ status }) {
+  if (status === 'completed')
+    return <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '10px' }}>✓</span>;
+  if (status === 'executing')
+    return <span style={{ color: '#fff', fontSize: '10px' }} className="animate-blink">●</span>;
+  return <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: '10px' }}>○</span>;
 }
 
 export default function Sidebar({ onNewSession, refreshKey }) {
-  const [projects, setProjects]   = useState([]);
-  const [expanded, setExpanded]   = useState(null);
-  const [convs, setConvs]         = useState({});
-  const [search, setSearch]       = useState('');
-  const { user, logout }          = useAuth();
-  const navigate                  = useNavigate();
+  const [projects, setProjects] = useState([]);
+  const [expanded, setExpanded] = useState(null);
+  const [convs, setConvs]       = useState({});
+  const [search, setSearch]     = useState('');
+  const { user, logout }        = useAuth();
+  const navigate                = useNavigate();
 
   useEffect(() => {
     api.getProjects().then(setProjects).catch(() => {});
@@ -45,83 +53,133 @@ export default function Sidebar({ onNewSession, refreshKey }) {
     }));
   };
 
-  const filteredProjects = search
+  const filtered = search
     ? projects.filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
     : projects;
 
-  const statusDot = (status) => {
-    if (status === 'completed') return <span className="text-g-bright">✓</span>;
-    if (status === 'executing') return <span className="text-g-bright animate-blink">▶</span>;
-    return <span className="text-g-dim">○</span>;
-  };
+  const tier   = user?.tier ?? 'free';
+  const badge  = TIER_BADGE[tier] ?? TIER_BADGE.free;
 
   return (
-    <aside className="flex flex-col h-full bg-black border-r border-g-border font-term select-none w-64 shrink-0">
+    <aside style={{
+      width: '240px',
+      flexShrink: 0,
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      background: '#0d0d0d',
+      borderRight: '1px solid rgba(255,255,255,0.07)',
+      userSelect: 'none',
+    }}>
 
-      {/* New Session */}
-      <div className="p-3 border-b border-g-border">
-        <button className="tbtn w-full" onClick={onNewSession}>
-          + NEW SESSION
+      {/* Brand + New Session */}
+      <div style={{ padding: '24px 16px 16px', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <div style={{
+          fontSize: '9px', fontWeight: 700, letterSpacing: '0.2em',
+          color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', marginBottom: '14px',
+        }}>
+          Meta-Agent
+        </div>
+        <button
+          className="tbtn"
+          onClick={onNewSession}
+          style={{ width: '100%', padding: '8px 16px', fontSize: '11px' }}
+        >
+          + New Session
         </button>
       </div>
 
       {/* Search */}
-      <div className="px-3 py-2 border-b border-g-border">
-        <div className="flex items-center gap-2 border border-g-border px-2 py-1">
-          <span className="text-g-dim text-sm">[SEARCH]</span>
-          <input
-            className="tinput text-base flex-1"
-            placeholder="find project"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
-        </div>
+      <div style={{ padding: '10px 16px', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <input
+          className="tinput"
+          placeholder="Search projects..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ fontSize: '13px' }}
+        />
       </div>
 
-      {/* Project + conversation list */}
-      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
-        <div className="text-g-dim text-sm mb-2">// RECENT SESSIONS</div>
+      {/* Project + session list */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 8px' }}>
+        <div style={{
+          fontSize: '9px', fontWeight: 700, letterSpacing: '0.16em',
+          color: 'rgba(255,255,255,0.28)', textTransform: 'uppercase',
+          padding: '0 8px', marginBottom: '8px',
+        }}>
+          Sessions
+        </div>
 
-        {filteredProjects.length === 0 && (
-          <div className="text-g-dim text-sm px-2">no projects yet</div>
+        {filtered.length === 0 && (
+          <div style={{ padding: '8px', color: 'rgba(255,255,255,0.25)', fontSize: '12px' }}>
+            No projects yet
+          </div>
         )}
 
-        {filteredProjects.map(proj => (
+        {filtered.map(proj => (
           <div key={proj.id}>
             <button
               onClick={() => toggle(proj)}
-              className="w-full text-left flex items-center gap-2 px-2 py-0.5 hover:bg-g-dark text-g-bright text-base transition-colors"
+              style={{
+                width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center',
+                gap: '6px', padding: '5px 8px', background: 'transparent', border: 'none',
+                color: 'rgba(255,255,255,0.75)', fontSize: '13px', cursor: 'pointer',
+                borderRadius: '3px', transition: 'background 0.1s',
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
             >
-              <span className="text-g-dim shrink-0">{expanded === proj.id ? '▼' : '>'}</span>
-              <span className="truncate flex-1">
-                {proj.name.toLowerCase().replace(/\s+/g, '_')}
+              <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: '10px', flexShrink: 0 }}>
+                {expanded === proj.id ? '▾' : '›'}
+              </span>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {proj.name}
               </span>
               {convs[proj.id] && (
-                <span className="text-g-dim text-xs shrink-0">
-                  ({convs[proj.id].length})
+                <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: '11px', flexShrink: 0 }}>
+                  {convs[proj.id].length}
                 </span>
               )}
             </button>
 
             {expanded === proj.id && (
-              <div className="pl-5 space-y-0.5 mt-0.5">
+              <div style={{ paddingLeft: '20px' }}>
                 {(convs[proj.id] || []).length === 0 && (
-                  <div className="text-g-dim text-xs px-2 py-1">no sessions</div>
+                  <div style={{ padding: '4px 8px', color: 'rgba(255,255,255,0.2)', fontSize: '11px' }}>
+                    No sessions
+                  </div>
                 )}
                 {(convs[proj.id] || []).map(c => {
                   const label = firstUserMessage(c);
                   return (
-                    <div key={c.id} className="flex items-center group">
+                    <div key={c.id} style={{ display: 'flex', alignItems: 'center', position: 'relative' }}
+                      className="group"
+                    >
                       <button
                         onClick={() => navigate(`/c/${c.id}`)}
-                        className="flex-1 text-left flex items-center gap-2 px-2 py-0.5 text-g-dim hover:text-g-bright hover:bg-g-dark text-sm transition-colors min-w-0"
+                        style={{
+                          flex: 1, textAlign: 'left', display: 'flex', alignItems: 'center',
+                          gap: '6px', padding: '4px 8px', background: 'transparent', border: 'none',
+                          color: 'rgba(255,255,255,0.45)', fontSize: '12px', cursor: 'pointer',
+                          borderRadius: '3px', minWidth: 0, transition: 'color 0.1s',
+                        }}
+                        onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.8)')}
+                        onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.45)')}
                       >
-                        <span className="shrink-0">{statusDot(c.status)}</span>
-                        <span className="truncate">{label.slice(0, 28)}{label.length > 28 ? '…' : ''}</span>
+                        <StatusDot status={c.status} />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {label.slice(0, 26)}{label.length > 26 ? '…' : ''}
+                        </span>
                       </button>
                       <button
                         onClick={e => deleteConv(e, c.id, proj.id)}
-                        className="hidden group-hover:block shrink-0 text-g-dim hover:text-red-400 text-xs px-1.5 py-0.5 transition-colors"
+                        style={{
+                          background: 'none', border: 'none', color: 'rgba(255,255,255,0.2)',
+                          fontSize: '11px', padding: '4px 6px', cursor: 'pointer',
+                          opacity: 0, transition: 'opacity 0.1s, color 0.1s',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.color = '#ff6b6b'; e.currentTarget.style.opacity = 1; }}
+                        onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.2)'; e.currentTarget.style.opacity = 0; }}
                         title="Delete session"
                       >
                         ✕
@@ -135,39 +193,50 @@ export default function Sidebar({ onNewSession, refreshKey }) {
         ))}
       </div>
 
-      {/* Bottom nav */}
-      <div className="border-t border-g-border p-3 space-y-1 text-base">
-        <button
-          onClick={() => navigate('/metrics')}
-          className="w-full text-left flex items-center gap-2 text-g-dim hover:text-g-bright transition-colors py-0.5"
-        >
-          <span>{'>'}</span>
-          <span>metrics</span>
-        </button>
-        <button
-          onClick={logout}
-          className="w-full text-left flex items-center gap-2 text-g-dim hover:text-g-bright transition-colors py-0.5"
-        >
-          <span>{'>'}</span>
-          <span>logout</span>
-        </button>
+      {/* Nav links */}
+      <div style={{ padding: '8px', borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+        {[
+          { label: 'Usage Metrics', action: () => navigate('/metrics') },
+          { label: 'Sign Out',      action: logout },
+        ].map(({ label, action }) => (
+          <button
+            key={label}
+            onClick={action}
+            style={{
+              width: '100%', textAlign: 'left', padding: '7px 8px',
+              background: 'transparent', border: 'none',
+              color: 'rgba(255,255,255,0.4)', fontSize: '12px',
+              fontWeight: 500, cursor: 'pointer', borderRadius: '3px',
+              transition: 'color 0.1s',
+              fontFamily: 'inherit',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.4)')}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      {/* User info strip */}
+      {/* User strip */}
       {user && (
-        <div className="border-t border-g-border px-3 py-2 text-xs space-y-0.5">
+        <div style={{ padding: '10px 16px', borderTop: '1px solid rgba(255,255,255,0.07)' }}>
           {user.email && (
-            <div className="text-g-dim truncate" title={user.email}>
+            <div style={{
+              fontSize: '11px', color: 'rgba(255,255,255,0.35)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              marginBottom: '4px',
+            }} title={user.email}>
               {user.email}
             </div>
           )}
-          <div className="flex items-center gap-2">
-            <span className={TIER_COLOR[user.tier] ?? 'text-g-dim'}>
-              {(user.tier ?? 'free').toUpperCase()}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.12em', color: badge.color }}>
+              {badge.label}
             </span>
             {user.requestsToday != null && (
-              <span className="text-g-dim">
-                · {user.requestsToday} req today
+              <span style={{ fontSize: '11px', color: 'rgba(255,255,255,0.25)' }}>
+                {user.requestsToday} req today
               </span>
             )}
           </div>

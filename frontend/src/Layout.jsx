@@ -5,37 +5,33 @@ import { api } from './api';
 
 const MODE_INFO = {
   normal: {
-    label:   'NORMAL',
-    hint:    'Execute immediately — agents run in parallel once requirements are clear.',
-    agents:  ['code_generator', 'api_designer', 'database_schema', 'testing_agent',
-              'frontend_generator', 'devops', 'security_auditor', 'documentation_agent', 'performance_optimizer'],
+    label: 'Normal',
+    hint:  'Execute immediately — agents run in parallel once requirements are clear.',
+    agents: ['code_generator', 'api_designer', 'database_schema', 'testing_agent',
+             'frontend_generator', 'devops', 'security_auditor', 'documentation_agent', 'performance_optimizer'],
   },
   hardcore: {
-    label:   'HARDCORE',
-    hint:    'Requirements first — agent asks clarifying questions before executing.',
-    agents:  ['requirements_gatherer', '→ all agents'],
+    label: 'Hardcore',
+    hint:  'Requirements first — agent asks clarifying questions before executing.',
+    agents: ['requirements_gatherer', '→ all agents'],
   },
 };
 
 export default function Layout({ children, status }) {
-  const [showModal, setShowModal]       = useState(false);
-  const [projects, setProjects]         = useState([]);
-  const [selProject, setSelProject]     = useState(null);
-  const [newProjName, setNewProjName]   = useState('');
-  const [newProjDesc, setNewProjDesc]   = useState('');
-  const [mode, setMode]                 = useState('normal');
-  const [message, setMessage]           = useState('');
-  const [creating, setCreating]         = useState(false);
-  const [error, setError]               = useState('');
-  const [sidebarKey, setSidebarKey]     = useState(0);
-  const navigate                        = useNavigate();
+  const [showModal, setShowModal]     = useState(false);
+  const [projects, setProjects]       = useState([]);
+  const [selProject, setSelProject]   = useState(null);
+  const [newProjName, setNewProjName] = useState('');
+  const [newProjDesc, setNewProjDesc] = useState('');
+  const [mode, setMode]               = useState('normal');
+  const [message, setMessage]         = useState('');
+  const [creating, setCreating]       = useState(false);
+  const [error, setError]             = useState('');
+  const [sidebarKey, setSidebarKey]   = useState(0);
+  const navigate                      = useNavigate();
 
   const openModal = async () => {
-    setError('');
-    setMessage('');
-    setNewProjName('');
-    setNewProjDesc('');
-    setMode('normal');
+    setError(''); setMessage(''); setNewProjName(''); setNewProjDesc(''); setMode('normal');
     const ps = await api.getProjects().catch(() => []);
     setProjects(ps);
     setSelProject(ps[0] ?? null);
@@ -45,8 +41,7 @@ export default function Layout({ children, status }) {
   const createSession = async (e) => {
     e.preventDefault();
     if (!message.trim()) { setError('Message is required'); return; }
-    setCreating(true);
-    setError('');
+    setCreating(true); setError('');
     try {
       let proj = selProject;
       if (!proj) {
@@ -67,61 +62,101 @@ export default function Layout({ children, status }) {
   const modeInfo = MODE_INFO[mode];
 
   return (
-    <div className="flex h-screen bg-black text-g-bright font-term crt overflow-hidden">
+    <div style={{
+      display: 'flex',
+      height: '100vh',
+      background: '#000',
+      overflow: 'hidden',
+      fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+    }}>
       <Sidebar onNewSession={openModal} refreshKey={sidebarKey} />
 
       {/* Main area */}
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
         {children}
 
         {/* Status bar */}
-        <div className="shrink-0 border-t border-g-border px-4 py-1 text-g-dim text-base flex items-center gap-2">
-          <span className="text-g-bright">{'>'}</span>
-          <span className="truncate">{status || 'ready | api: ONLINE'}</span>
-          <span className="ml-auto shrink-0 text-xs opacity-40">
+        <div style={{
+          flexShrink: 0,
+          borderTop: '1px solid rgba(255,255,255,0.07)',
+          padding: '6px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+        }}>
+          <span style={{ fontSize: '10px', fontWeight: 600, letterSpacing: '0.1em', color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase' }}>
+            {status || 'Ready — API Online'}
+          </span>
+          <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'rgba(255,255,255,0.18)', letterSpacing: '0.05em' }}>
             {new Date().toLocaleTimeString('en-US', { hour12: false })}
           </span>
         </div>
       </div>
 
-      {/* ── New Session Modal ──────────────────────────────────────────────── */}
+      {/* ── New Session Modal ── */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-          <div className="border border-g-bright glow-box bg-black w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="text-g-bright text-xl mb-5">// NEW SESSION</div>
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
+            backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', zIndex: 50, padding: '16px',
+          }}
+          onClick={e => e.target === e.currentTarget && setShowModal(false)}
+        >
+          <div style={{
+            background: '#0d0d0d',
+            border: '1px solid rgba(255,255,255,0.1)',
+            width: '100%', maxWidth: '520px',
+            padding: '36px 40px',
+            maxHeight: '90vh', overflowY: 'auto',
+          }}>
+            {/* Heading */}
+            <div style={{ marginBottom: '32px' }}>
+              <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.18em', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', marginBottom: '8px' }}>
+                New Session
+              </div>
+              <div style={{ fontSize: '28px', fontWeight: 200, letterSpacing: '-0.02em', color: '#fff' }}>
+                What do you want to build?
+              </div>
+            </div>
 
-            <form onSubmit={createSession} className="space-y-4">
+            <form onSubmit={createSession}>
 
-              {/* Project picker */}
-              <div>
-                <div className="text-g-dim text-sm mb-1">{'>'} project</div>
+              {/* Project */}
+              <div style={{ marginBottom: '24px' }}>
+                <div style={{ fontSize: '10px', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)', marginBottom: '10px' }}>
+                  Project
+                </div>
                 {projects.length > 0 && (
                   <select
-                    className="w-full bg-g-dark border border-g-border text-g-bright font-term text-base px-3 py-1 outline-none focus:border-g-bright"
+                    style={{
+                      width: '100%', background: '#111', border: '1px solid rgba(255,255,255,0.12)',
+                      color: '#fff', fontFamily: 'inherit', fontSize: '14px',
+                      padding: '8px 12px', outline: 'none', borderRadius: '2px',
+                    }}
                     value={selProject?.id ?? ''}
                     onChange={e => {
                       const p = projects.find(x => x.id === parseInt(e.target.value));
                       setSelProject(p ?? null);
                     }}
                   >
-                    <option value="">— create new project —</option>
+                    <option value="">— Create new project —</option>
                     {projects.map(p => (
                       <option key={p.id} value={p.id}>{p.name}</option>
                     ))}
                   </select>
                 )}
-
                 {!selProject && (
-                  <div className="mt-2 space-y-2">
+                  <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     <input
-                      className="tinput w-full"
-                      placeholder="project name..."
+                      className="tinput"
+                      placeholder="Project name..."
                       value={newProjName}
                       onChange={e => setNewProjName(e.target.value)}
                     />
                     <input
-                      className="tinput w-full"
-                      placeholder="description (optional)..."
+                      className="tinput"
+                      placeholder="Description (optional)..."
                       value={newProjDesc}
                       onChange={e => setNewProjDesc(e.target.value)}
                     />
@@ -129,10 +164,12 @@ export default function Layout({ children, status }) {
                 )}
               </div>
 
-              {/* Mode selector */}
-              <div>
-                <div className="text-g-dim text-sm mb-1">{'>'} mode</div>
-                <div className="flex gap-2 mb-2">
+              {/* Mode */}
+              <div style={{ marginBottom: '24px' }}>
+                <div style={{ fontSize: '10px', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)', marginBottom: '10px' }}>
+                  Mode
+                </div>
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
                   {Object.keys(MODE_INFO).map(m => (
                     <button
                       key={m}
@@ -144,46 +181,74 @@ export default function Layout({ children, status }) {
                     </button>
                   ))}
                 </div>
-                <div className="text-g-dim text-xs leading-snug">{modeInfo.hint}</div>
-                <div className="flex flex-wrap gap-1 mt-2">
+                <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)', lineHeight: '1.5', marginBottom: '8px' }}>
+                  {modeInfo.hint}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                   {modeInfo.agents.map(a => (
-                    <span key={a} className="border border-g-border text-g-dim text-xs px-1.5 py-0.5">
+                    <span key={a} style={{
+                      border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.3)',
+                      fontSize: '10px', padding: '2px 8px', borderRadius: '2px', fontWeight: 500,
+                      letterSpacing: '0.05em',
+                    }}>
                       {a.replace(/_/g, ' ')}
                     </span>
                   ))}
                 </div>
               </div>
 
-              {/* Request message */}
-              <div>
-                <div className="text-g-dim text-sm mb-1">{'>'} describe what to build</div>
+              {/* Message */}
+              <div style={{ marginBottom: '24px' }}>
+                <div style={{ fontSize: '10px', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)', marginBottom: '10px' }}>
+                  Describe what to build
+                </div>
                 <textarea
                   autoFocus
-                  className="w-full bg-g-dark border border-g-border text-g-bright font-term text-base px-3 py-2 outline-none focus:border-g-bright resize-none"
-                  placeholder="Build a REST API for a todo app with user authentication..."
+                  style={{
+                    width: '100%', background: '#111', border: '1px solid rgba(255,255,255,0.12)',
+                    color: '#fff', fontFamily: 'inherit', fontSize: '14px', lineHeight: '1.6',
+                    padding: '12px', outline: 'none', resize: 'none', borderRadius: '2px',
+                    transition: 'border-color 0.2s',
+                  }}
+                  placeholder="Build a REST API for a todo app with authentication..."
                   rows={4}
                   value={message}
                   onChange={e => setMessage(e.target.value)}
+                  onFocus={e => (e.target.style.borderColor = 'rgba(255,255,255,0.3)')}
+                  onBlur={e  => (e.target.style.borderColor = 'rgba(255,255,255,0.12)')}
                 />
-                <div className="text-g-dim text-xs mt-1 text-right">
+                <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.2)', textAlign: 'right', marginTop: '4px' }}>
                   {message.length}/5000
                 </div>
               </div>
 
               {error && (
-                <div className="text-red-400 text-base">{'>'} ERROR: {error}</div>
+                <div style={{ color: '#ff6b6b', fontSize: '13px', marginBottom: '16px' }}>
+                  {error}
+                </div>
               )}
 
-              <div className="flex gap-3 pt-1">
-                <button type="submit" className="tbtn" disabled={creating}>
-                  {creating ? 'LAUNCHING...' : 'START SESSION'}
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  type="submit"
+                  disabled={creating}
+                  style={{
+                    flex: 1, padding: '10px', background: '#fff', color: '#000',
+                    border: 'none', fontSize: '11px', fontWeight: 700, letterSpacing: '0.12em',
+                    textTransform: 'uppercase', cursor: creating ? 'not-allowed' : 'pointer',
+                    opacity: creating ? 0.5 : 1, borderRadius: '2px', fontFamily: 'inherit',
+                    transition: 'opacity 0.15s',
+                  }}
+                >
+                  {creating ? 'Launching...' : 'Start Session'}
                 </button>
                 <button
                   type="button"
                   className="tbtn"
                   onClick={() => setShowModal(false)}
+                  style={{ padding: '10px 20px' }}
                 >
-                  CANCEL
+                  Cancel
                 </button>
               </div>
             </form>

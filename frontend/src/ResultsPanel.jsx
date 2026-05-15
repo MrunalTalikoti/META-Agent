@@ -1,13 +1,13 @@
 import { useState } from 'react';
 
 const TABS = [
-  { key: 'code',     label: 'CODE'      },
-  { key: 'tests',    label: 'TESTS'     },
-  { key: 'api',      label: 'API SPEC'  },
-  { key: 'schema',   label: 'DB SCHEMA' },
-  { key: 'docs',     label: 'DOCS'      },
-  { key: 'frontend', label: 'FRONTEND'  },
-  { key: 'devops',   label: 'DEVOPS'    },
+  { key: 'code',     label: 'Code'      },
+  { key: 'tests',    label: 'Tests'     },
+  { key: 'api',      label: 'API Spec'  },
+  { key: 'schema',   label: 'DB Schema' },
+  { key: 'docs',     label: 'Docs'      },
+  { key: 'frontend', label: 'Frontend'  },
+  { key: 'devops',   label: 'DevOps'    },
 ];
 
 function extractOutputs(result) {
@@ -54,23 +54,23 @@ function extractOutputs(result) {
   };
 }
 
-function scoreColor(score) {
-  if (score >= 8) return 'text-g-bright';
-  if (score >= 6) return 'text-yellow-400';
-  return 'text-red-400';
+function qualityColor(score) {
+  if (score >= 8) return 'rgba(255,255,255,0.8)';
+  if (score >= 6) return '#f5c518';
+  return '#ff6b6b';
 }
 
 export default function ResultsPanel({ result, onShowFiles }) {
   const { outputs, validations } = extractOutputs(result);
-  const available = TABS.filter(t => outputs[t.key]);
-  const [active, setActive]         = useState(available[0]?.key ?? 'code');
-  const [copied, setCopied]         = useState(false);
-  const [showNotes, setShowNotes]   = useState(false);
+  const available   = TABS.filter(t => outputs[t.key]);
+  const [active, setActive]       = useState(available[0]?.key ?? 'code');
+  const [copied, setCopied]       = useState(false);
+  const [showNotes, setShowNotes] = useState(false);
 
   if (available.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-g-dim text-base">
-        {'>'} no output to display
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.3)', fontSize: '14px' }}>
+        No output to display
       </div>
     );
   }
@@ -91,41 +91,59 @@ export default function ResultsPanel({ result, onShowFiles }) {
   };
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
       {/* Summary bar */}
-      <div className="shrink-0 px-4 py-1.5 border-b border-g-border text-base flex items-center gap-4 flex-wrap">
-        <span className="text-g-bright">{'>'} execution complete</span>
-        <span className="text-g-dim">
-          tasks: {result?.summary?.completed ?? '?'}/{result?.summary?.total ?? '?'}
+      <div style={{
+        flexShrink: 0, padding: '8px 20px',
+        borderBottom: '1px solid rgba(255,255,255,0.07)',
+        display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap',
+      }}>
+        <span style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#fff' }}>
+          Execution Complete
+        </span>
+        <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.35)' }}>
+          {result?.summary?.completed ?? '?'} / {result?.summary?.total ?? '?'} tasks
         </span>
         {(result?.summary?.failed ?? 0) > 0 && (
-          <span className="text-red-400">failed: {result.summary.failed}</span>
+          <span style={{ fontSize: '12px', color: '#ff6b6b' }}>
+            {result.summary.failed} failed
+          </span>
         )}
         {onShowFiles && (
-          <button className="tbtn text-sm ml-auto" onClick={onShowFiles}>
-            FILES
+          <button className="tbtn" onClick={onShowFiles} style={{ marginLeft: 'auto' }}>
+            Files
           </button>
         )}
       </div>
 
       {/* Tab bar */}
-      <div className="shrink-0 flex items-end border-b border-g-border px-4 overflow-x-auto">
+      <div style={{
+        flexShrink: 0, display: 'flex', alignItems: 'flex-end',
+        borderBottom: '1px solid rgba(255,255,255,0.07)',
+        padding: '0 20px', overflowX: 'auto', gap: '0',
+      }}>
         {available.map(t => {
-          const v = validations[t.key];
-          const dot = v
-            ? <span className={`ml-1 text-xs ${v.quality?.score >= 6 ? 'text-g-bright' : 'text-red-400'}`}>●</span>
+          const v      = validations[t.key];
+          const isGood = v?.quality?.score >= 6;
+          const dot    = v
+            ? <span style={{ marginLeft: '5px', fontSize: '6px', color: isGood ? 'rgba(255,255,255,0.5)' : '#ff6b6b' }}>●</span>
             : null;
+          const isActive = active === t.key;
           return (
             <button
               key={t.key}
               onClick={() => { setActive(t.key); setShowNotes(false); }}
-              className={`
-                px-4 py-1.5 font-term text-base border-b-2 whitespace-nowrap transition-colors
-                ${active === t.key
-                  ? 'border-g-bright text-g-bright'
-                  : 'border-transparent text-g-dim hover:text-g-bright'}
-              `}
+              style={{
+                padding: '10px 16px', background: 'none', border: 'none',
+                borderBottom: isActive ? '2px solid #fff' : '2px solid transparent',
+                color: isActive ? '#fff' : 'rgba(255,255,255,0.4)',
+                fontFamily: 'inherit', fontSize: '12px', fontWeight: isActive ? 600 : 400,
+                cursor: 'pointer', whiteSpace: 'nowrap', letterSpacing: '0.02em',
+                transition: 'color 0.12s', marginBottom: '-1px',
+              }}
+              onMouseEnter={e => { if (!isActive) e.currentTarget.style.color = 'rgba(255,255,255,0.75)'; }}
+              onMouseLeave={e => { if (!isActive) e.currentTarget.style.color = 'rgba(255,255,255,0.4)'; }}
             >
               {t.label}{dot}
             </button>
@@ -135,25 +153,37 @@ export default function ResultsPanel({ result, onShowFiles }) {
 
       {/* Validation bar */}
       {validation && (
-        <div className="shrink-0 px-4 py-1 border-b border-g-border bg-g-dark flex items-center gap-4 text-sm flex-wrap">
-          <span className="text-g-dim shrink-0">validation:</span>
-          <span className={validation.syntax?.passed ? 'text-g-bright' : 'text-red-400'}>
-            syntax {validation.syntax?.passed ? '✓ ok' : '✗ fail'}
+        <div style={{
+          flexShrink: 0, padding: '6px 20px',
+          borderBottom: '1px solid rgba(255,255,255,0.07)',
+          background: '#0a0a0a', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap',
+        }}>
+          <span style={{ fontSize: '10px', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)' }}>
+            Validation
           </span>
-          <span className={scoreColor(validation.quality?.score ?? 0)}>
-            quality {validation.quality?.score ?? '?'}/10
+          <span style={{ fontSize: '12px', color: validation.syntax?.passed ? 'rgba(255,255,255,0.7)' : '#ff6b6b' }}>
+            Syntax {validation.syntax?.passed ? '✓ ok' : '✕ fail'}
+          </span>
+          <span style={{ fontSize: '12px', color: qualityColor(validation.quality?.score ?? 0) }}>
+            Quality {validation.quality?.score ?? '?'}/10
           </span>
           {validation.quality?.summary && (
-            <span className="text-g-dim truncate max-w-xs hidden sm:inline">
+            <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.3)', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '240px', whiteSpace: 'nowrap' }}>
               {validation.quality.summary}
             </span>
           )}
           {allIssues.length > 0 && (
             <button
-              className="ml-auto text-yellow-400 text-xs shrink-0 hover:text-g-bright transition-colors"
               onClick={() => setShowNotes(!showNotes)}
+              style={{
+                marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: '11px', color: '#f5c518', fontFamily: 'inherit',
+                transition: 'color 0.1s',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.color = '#fff')}
+              onMouseLeave={e => (e.currentTarget.style.color = '#f5c518')}
             >
-              {showNotes ? '▲ hide' : `▼ ${allIssues.length} note(s)`}
+              {showNotes ? '▲ Hide' : `▼ ${allIssues.length} note${allIssues.length !== 1 ? 's' : ''}`}
             </button>
           )}
         </div>
@@ -161,35 +191,40 @@ export default function ResultsPanel({ result, onShowFiles }) {
 
       {/* Expanded notes */}
       {showNotes && allIssues.length > 0 && (
-        <div className="shrink-0 px-4 py-2 border-b border-g-border bg-g-dark space-y-1 text-sm max-h-28 overflow-y-auto">
+        <div style={{
+          flexShrink: 0, padding: '8px 20px',
+          borderBottom: '1px solid rgba(255,255,255,0.07)',
+          background: '#0a0a0a', maxHeight: '120px', overflowY: 'auto',
+          display: 'flex', flexDirection: 'column', gap: '4px',
+        }}>
           {allIssues.map((issue, i) => (
-            <div
-              key={i}
-              className={
-                issue.severity === 'error'      ? 'text-red-400' :
-                issue.severity === 'warning'    ? 'text-yellow-400' :
-                issue.severity === 'suggestion' ? 'text-g-dim' :
-                'text-g-dim'
-              }
-            >
+            <div key={i} style={{
+              fontSize: '12px',
+              color: issue.severity === 'error'   ? '#ff6b6b' :
+                     issue.severity === 'warning' ? '#f5c518' : 'rgba(255,255,255,0.4)',
+            }}>
               [{issue.severity}]{issue.line ? ` line ${issue.line}:` : ''} {issue.message}
             </div>
           ))}
         </div>
       )}
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4">
+      {/* Code content */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
         {content ? (
-          <div className="relative">
-            <button onClick={copy} className="tbtn text-sm absolute top-3 right-3 z-10">
-              {copied ? 'COPIED ✓' : 'COPY'}
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={copy}
+              className="tbtn"
+              style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 10 }}
+            >
+              {copied ? 'Copied ✓' : 'Copy'}
             </button>
-            <pre className="code-block pr-20">{content}</pre>
+            <pre className="code-block" style={{ paddingRight: '80px' }}>{content}</pre>
           </div>
         ) : (
-          <div className="text-g-dim text-base">
-            {'>'} no {active} output in this session
+          <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.3)' }}>
+            No {active} output in this session
           </div>
         )}
       </div>
