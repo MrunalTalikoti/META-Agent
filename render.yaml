@@ -55,6 +55,7 @@ services:
   - type: redis
     name: meta-agent-redis
     plan: free
+    ipAllowList: []  # empty = allow all (backend service connects internally)
 
 # ── PostgreSQL ───────────────────────────────────────────────────────────────
 databases:
