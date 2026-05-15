@@ -13,9 +13,10 @@ export default {
         },
       },
       fontFamily: {
-        term:  ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
-        pixel: ['Inter', 'sans-serif'],
-        mono:  ['"Courier New"', '"Monaco"', '"Menlo"', 'monospace'],
+        term:    ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+        pixel:   ['Inter', 'sans-serif'],
+        mono:    ['"Courier New"', '"Monaco"', '"Menlo"', 'monospace'],
+        display: ['Chiqueta', 'Inter', 'sans-serif'],
       },
       keyframes: {
         blink: {

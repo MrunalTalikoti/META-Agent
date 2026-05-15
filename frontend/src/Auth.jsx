@@ -62,11 +62,12 @@ const s = {
     textAlign: 'right',
   },
   heading: {
+    fontFamily: "'Chiqueta', 'Inter', sans-serif",
     color: '#fff',
-    fontSize: '52px',
-    fontWeight: 300,
+    fontSize: '56px',
+    fontWeight: 400,
     margin: '0 0 44px 0',
-    letterSpacing: '-0.02em',
+    letterSpacing: '0.01em',
     lineHeight: 1,
   },
   label: {

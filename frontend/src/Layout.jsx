@@ -115,7 +115,7 @@ export default function Layout({ children, status }) {
               <div style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '0.18em', color: 'rgba(255,255,255,0.35)', textTransform: 'uppercase', marginBottom: '8px' }}>
                 New Session
               </div>
-              <div style={{ fontSize: '28px', fontWeight: 200, letterSpacing: '-0.02em', color: '#fff' }}>
+              <div style={{ fontFamily: "'Chiqueta', 'Inter', sans-serif", fontSize: '30px', fontWeight: 400, letterSpacing: '0.01em', color: '#fff' }}>
                 What do you want to build?
               </div>
             </div>

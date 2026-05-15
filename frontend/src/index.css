@@ -32,13 +32,18 @@ html, body, #root {
 /* ── CRT: removed ── */
 .crt::after { display: none; }
 
-/* ── Display / Hero typography ── */
+/* ── Display / Hero typography — Chiqueta ── */
 .logo-pixel {
-  font-family: 'Inter', sans-serif;
-  font-weight: 100;
+  font-family: 'Chiqueta', 'Inter', sans-serif;
+  font-weight: 400;
   color: #fff;
-  letter-spacing: -0.04em;
+  letter-spacing: -0.01em;
   line-height: 0.93;
+}
+
+/* ── General display heading helper ── */
+.font-chiqueta {
+  font-family: 'Chiqueta', 'Inter', sans-serif;
 }
 
 /* ── Blinking cursor ── */

@@ -81,7 +81,7 @@ export default function FileBrowser({ projectId, projectName, onClose }) {
             }}>
               Project Files
             </div>
-            <div style={{ fontSize: '20px', fontWeight: 200, letterSpacing: '-0.01em' }}>
+            <div style={{ fontFamily: "'Chiqueta', 'Inter', sans-serif", fontSize: '22px', fontWeight: 400, letterSpacing: '0.01em' }}>
               {projectName ?? 'Project'}
             </div>
             {data && (

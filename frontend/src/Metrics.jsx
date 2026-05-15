@@ -96,7 +96,7 @@ export default function Metrics() {
             }}>
               Meta-Agent
             </div>
-            <div style={{ fontSize: 'clamp(2rem, 5vw, 4rem)', fontWeight: 100, letterSpacing: '-0.03em', lineHeight: 1 }}>
+            <div style={{ fontFamily: "'Chiqueta', 'Inter', sans-serif", fontSize: 'clamp(2rem, 5vw, 4rem)', fontWeight: 400, letterSpacing: '0.01em', lineHeight: 1 }}>
               Usage Metrics
             </div>
           </div>
