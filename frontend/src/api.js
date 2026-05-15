@@ -1,4 +1,6 @@
-// All API calls go through Vite's dev proxy: /api → http://localhost:8000
+// In dev, Vite proxies /api → http://localhost:8000.
+// In production (Render), VITE_API_BASE_URL points to the backend service.
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
 export function getToken() {
   return localStorage.getItem('ma_token');
@@ -11,7 +13,7 @@ async function req(path, opts = {}) {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...opts.headers,
   };
-  const res = await fetch(path, {
+  const res = await fetch(BASE_URL + path, {
     ...opts,
     headers,
     body: opts.json !== undefined ? JSON.stringify(opts.json) : opts.body,
@@ -28,7 +30,7 @@ export const api = {
     req('/api/auth/register', { method: 'POST', json: { email, password } }),
 
   login: async (email, password) => {
-    const res = await fetch('/api/auth/token', {
+    const res = await fetch(BASE_URL + '/api/auth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ username: email, password }),
@@ -67,7 +69,7 @@ export const api = {
 
   // ── Export & Files ────────────────────────────────────────
   exportProject: (projectId) =>
-    fetch(`/api/projects/${projectId}/export`, {
+    fetch(BASE_URL + `/api/projects/${projectId}/export`, {
       headers: { Authorization: `Bearer ${getToken()}` },
     }),
 
@@ -84,7 +86,7 @@ export async function* streamConversation(conversationId) {
   const token = getToken();
   let res;
   try {
-    res = await fetch(`/api/conversations/${conversationId}/stream`, {
+    res = await fetch(BASE_URL + `/api/conversations/${conversationId}/stream`, {
       headers: { Authorization: `Bearer ${token}` },
     });
   } catch { return; }

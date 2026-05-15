@@ -1,0 +1,63 @@
+services:
+  # ── Backend (FastAPI) ────────────────────────────────────────────────────────
+  - type: web
+    name: meta-agent-backend
+    env: docker
+    dockerfilePath: ./meta_agent/dockerfile
+    dockerContext: ./meta_agent
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: meta-agent-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: meta-agent-redis
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "False"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Set this to your frontend URL after the first deploy
+      # e.g. https://meta-agent-frontend.onrender.com
+      - key: CORS_ORIGINS
+        sync: false
+
+  # ── Frontend (React/Vite static site) ───────────────────────────────────────
+  - type: web
+    name: meta-agent-frontend
+    env: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      # Set this to your backend URL after it deploys
+      # e.g. https://meta-agent-backend.onrender.com
+      - key: VITE_API_BASE_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  - type: redis
+    name: meta-agent-redis
+    plan: free
+
+# ── PostgreSQL ───────────────────────────────────────────────────────────────
+databases:
+  - name: meta-agent-db
+    databaseName: metaagent
+    plan: free
