@@ -106,6 +106,7 @@ export default function Conversation() {
   const [sending, setSending]     = useState(false);
   const [tasks, setTasks]         = useState([]);
   const [streaming, setStreaming] = useState(false);
+  const [streamError, setStreamError] = useState(null);
   const [showFiles, setShowFiles] = useState(false);
   const [deleting, setDeleting]   = useState(false);
   const streamGuard               = useRef(false);
@@ -127,6 +128,7 @@ export default function Conversation() {
     if (streamGuard.current) return;
     streamGuard.current = true;
     setStreaming(true);
+    setStreamError(null);
     try {
       for await (const evt of streamConversation(id)) {
         if (evt.type === 'task_update') {
@@ -136,12 +138,16 @@ export default function Conversation() {
             return [...prev, evt];
           });
         }
+        if (evt.type === 'timeout') {
+          setStreamError('Execution timed out. The agents may still be running in the background.');
+          break;
+        }
         if (evt.type === 'done' || (evt.type === 'conversation_status' && evt.status === 'completed')) {
           const updated = await api.getConversation(id);
           setConv(updated); setStreaming(false); streamGuard.current = false; return;
         }
       }
-    } catch { /* SSE ended */ }
+    } catch { /* SSE connection ended */ }
     const updated = await api.getConversation(id).catch(() => null);
     if (updated) setConv(updated);
     setStreaming(false); streamGuard.current = false;
@@ -174,6 +180,7 @@ export default function Conversation() {
   const isExecuting = conv?.status === 'executing' || streaming;
   const isCompleted = conv?.status === 'completed' && !streaming;
   const isRefining  = conv?.status === 'refining';
+  const isFailed    = conv?.status === 'failed';
 
   const getResult = () => {
     if (!conv?.messages) return null;
@@ -303,7 +310,7 @@ export default function Conversation() {
         </div>
 
         {/* Input area */}
-        {(isGathering || isReady || isCompleted || isRefining) && (
+        {(isGathering || isReady || isCompleted || isRefining || isFailed) && (
           <div style={{
             flexShrink: 0, borderTop: '1px solid rgba(255,255,255,0.07)',
             padding: '16px 20px',
@@ -344,6 +351,29 @@ export default function Conversation() {
                 {sending ? 'Sending...' : 'Send'}
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Error / timeout banner */}
+        {(streamError || isFailed) && (
+          <div style={{
+            flexShrink: 0, borderTop: '1px solid rgba(255,100,100,0.2)',
+            padding: '10px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            fontSize: '12px', color: 'rgba(255,150,150,0.9)', background: 'rgba(255,50,50,0.06)',
+          }}>
+            <span>{streamError || 'This conversation encountered an error. You can reset it or start a new one.'}</span>
+            <button
+              className="tbtn"
+              style={{ flexShrink: 0, borderColor: 'rgba(255,100,100,0.3)', color: 'rgba(255,150,150,0.9)' }}
+              onClick={async () => {
+                setStreamError(null);
+                const updated = await api.getConversation(id).catch(() => null);
+                if (updated) setConv(updated);
+                if (updated?.status === 'executing') startStream();
+              }}
+            >
+              Refresh
+            </button>
           </div>
         )}
 
