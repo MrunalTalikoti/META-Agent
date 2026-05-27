@@ -17,6 +17,7 @@ from app.agents.security_auditor import SecurityAuditorAgent
 from app.agents.performance_optimizer import PerformanceOptimizerAgent
 from app.core.task_decomposer import TaskDecomposer, DecomposedTask
 from app.models.database import Task, TaskStatus, AgentType, Project
+from app.core.project_context import ProjectContext
 from app.services.validation import ValidationOrchestrator, ConsistencyValidator
 from app.utils.logger import logger
 
@@ -132,13 +133,16 @@ class MetaAgentOrchestrator:
         results: Dict[int, AgentResult] = {}
         completed_count = 0
         failed_count = 0
+        ctx = ProjectContext()
+        subtask_map = {s.id: s for s in subtasks}
 
         for level_tasks in self._group_by_level(subtasks):
-            level_results = await self._execute_level(level_tasks, task_db_map, results, db)
+            level_results = await self._execute_level(level_tasks, task_db_map, results, db, ctx)
             for task_id, result in level_results.items():
                 results[task_id] = result
                 if result.success:
                     completed_count += 1
+                    ctx.add(subtask_map[task_id].agent, result.output)
                 else:
                     failed_count += 1
 
@@ -195,7 +199,10 @@ class MetaAgentOrchestrator:
         task_db_map: Dict[int, Task],
         results: Dict[int, AgentResult],
         db: Session,
+        ctx: ProjectContext,
     ) -> Dict[int, AgentResult]:
+        # Snapshot before the level starts — all agents in this level see the same state
+        context_snapshot = ctx.snapshot()
 
         async def execute_single(subtask: DecomposedTask):
             db_task = task_db_map[subtask.id]
@@ -226,6 +233,7 @@ class MetaAgentOrchestrator:
                         db=db,
                         inputs=subtask.inputs,
                         dependency_results=dependency_results,
+                        project_context=context_snapshot,
                     ),
                     timeout=TASK_TIMEOUT_SECONDS,
                 )

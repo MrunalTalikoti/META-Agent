@@ -3,7 +3,7 @@ import json
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
@@ -79,10 +79,11 @@ class BaseAgent(ABC):
         description: str,
         inputs: dict = None,
         dependency_results: dict = None,
+        project_context: Optional[str] = None,
     ) -> str:
         """
         Constructs the user message sent to the LLM.
-        Injects dependency results so agents can build on each other.
+        Injects dependency results and shared project context.
         """
         parts = [f"Task: {description}"]
 
@@ -94,6 +95,9 @@ class BaseAgent(ABC):
             for task_id, result in dependency_results.items():
                 output = result.get("output", {})
                 parts.append(f"\nTask {task_id} output:\n{json.dumps(output, indent=2)}")
+
+        if project_context:
+            parts.append(f"\nOther agents have already produced the following (use for consistency):\n{project_context}")
 
         return "\n".join(parts)
 
@@ -109,6 +113,7 @@ class BaseAgent(ABC):
         db: Session,
         inputs: dict = None,
         dependency_results: dict = None,
+        project_context: Optional[str] = None,
     ) -> AgentResult:
         """
         Main execution method. Called by the orchestrator.
@@ -119,7 +124,7 @@ class BaseAgent(ABC):
 
         messages = [
             {"role": "system", "content": self.get_system_prompt()},
-            {"role": "user", "content": self.build_user_message(description, inputs, dependency_results)},
+            {"role": "user", "content": self.build_user_message(description, inputs, dependency_results, project_context)},
         ]
 
         # ── Cache check ───────────────────────────────────────────────────────
