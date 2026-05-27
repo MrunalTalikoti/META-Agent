@@ -2,7 +2,7 @@ import enum
 from datetime import datetime, date
 
 from sqlalchemy import (
-    Column, DateTime, Enum, ForeignKey,
+    BigInteger, Column, DateTime, Enum, ForeignKey,
     Integer, JSON, String, Text, Date
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
@@ -187,7 +187,7 @@ class AgentExecution(Base):
     prompt_tokens = Column(Integer, default=0)
     completion_tokens = Column(Integer, default=0)
     total_tokens = Column(Integer, default=0)
-    estimated_cost_usd = Column(Integer, default=0)     # stored as microdollars (x1,000,000)
+    estimated_cost_usd = Column(BigInteger, default=0)   # stored as microdollars (x1,000,000)
 
     execution_time_ms = Column(Integer, default=0)
     success = Column(Integer, default=1)                 # 1=success, 0=failure
