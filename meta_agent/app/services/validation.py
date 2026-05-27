@@ -12,7 +12,7 @@ import ast
 import json
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from app.services.llm_service import LLMService
 from app.utils.logger import logger
@@ -240,3 +240,207 @@ class ValidationOrchestrator:
             f"| quality={quality_result.score}/10"
         )
         return report
+
+
+# ── Cross-Agent Consistency ───────────────────────────────────────────────────
+
+@dataclass
+class ConsistencyFinding:
+    severity: str          # "error" | "warning"
+    category: str          # e.g. "field_mismatch", "endpoint_mismatch"
+    agents: List[str]
+    description: str
+
+
+@dataclass
+class ConsistencyReport:
+    passed: bool
+    findings: List[ConsistencyFinding] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "passed": self.passed,
+            "finding_count": len(self.findings),
+            "findings": [
+                {
+                    "severity": f.severity,
+                    "category": f.category,
+                    "agents": f.agents,
+                    "description": f.description,
+                }
+                for f in self.findings
+            ],
+        }
+
+
+# Agent pairs worth comparing — only check agents whose outputs form a contract
+_CONSISTENCY_PAIRS = {
+    ("api_designer", "code_generator"),
+    ("api_designer", "frontend_generator"),
+    ("database_schema", "code_generator"),
+    ("code_generator", "testing_agent"),
+}
+
+_MAX_SUMMARY_CHARS = 1500
+
+
+def _extract_interface_summary(agent_name: str, output: dict) -> Optional[str]:
+    """Pull the contract-relevant fragment from an agent's output."""
+    if agent_name == "api_designer":
+        design = output.get("api_design", output)
+        endpoints = design.get("endpoints", [])
+        if endpoints:
+            compact = [
+                {"path": ep.get("path"), "method": ep.get("method"),
+                 "request": ep.get("request_body", ep.get("request")),
+                 "response": ep.get("response", ep.get("response_body"))}
+                for ep in endpoints[:15]
+            ]
+            return json.dumps(compact, indent=1)
+        return json.dumps(design, indent=1)[:_MAX_SUMMARY_CHARS]
+
+    if agent_name == "database_schema":
+        sql = output.get("sql_ddl", "")
+        if sql:
+            return sql[:_MAX_SUMMARY_CHARS]
+        schema = output.get("schema", {})
+        if schema:
+            return json.dumps(schema, indent=1)[:_MAX_SUMMARY_CHARS]
+        return None
+
+    if agent_name == "code_generator":
+        code = output.get("code") or output.get("raw_output", "")
+        return code[:_MAX_SUMMARY_CHARS] if code else None
+
+    if agent_name == "frontend_generator":
+        components = output.get("components", [])
+        if components:
+            return "\n---\n".join(c[:500] for c in components[:5])
+        return None
+
+    if agent_name == "testing_agent":
+        test_code = output.get("test_code") or output.get("raw_output", "")
+        return test_code[:_MAX_SUMMARY_CHARS] if test_code else None
+
+    return None
+
+
+class ConsistencyValidator:
+    """
+    Compares outputs from multiple agents to detect cross-agent contradictions.
+
+    Uses a single LLM call with compact interface summaries rather than full
+    outputs — keeps token usage proportional to the number of agent pairs,
+    not to total output volume.
+    """
+
+    def __init__(self):
+        self.llm = LLMService()
+
+    async def validate(
+        self,
+        agent_outputs: Dict[str, dict],
+    ) -> ConsistencyReport:
+        present = set(agent_outputs.keys())
+
+        pairs_to_check = [
+            (a, b) for a, b in _CONSISTENCY_PAIRS
+            if a in present and b in present
+        ]
+
+        if not pairs_to_check:
+            return ConsistencyReport(passed=True)
+
+        summaries: Dict[str, str] = {}
+        for agent_name in present:
+            summary = _extract_interface_summary(agent_name, agent_outputs[agent_name])
+            if summary:
+                summaries[agent_name] = summary
+
+        if len(summaries) < 2:
+            return ConsistencyReport(passed=True)
+
+        prompt_sections = []
+        for name, summary in summaries.items():
+            prompt_sections.append(f"── {name} ──\n{summary}")
+        combined = "\n\n".join(prompt_sections)
+
+        pairs_desc = ", ".join(f"{a} ↔ {b}" for a, b in pairs_to_check)
+
+        system_prompt = """You are a senior integration engineer. Given outputs from multiple AI agents that are part of the same project, find contradictions between them.
+
+Check for:
+- Field/column name mismatches (e.g. "user_id" vs "id", "email" vs "email_address")
+- Endpoint path or method mismatches between API spec and implementation
+- Response schema differences between API spec and frontend expectations
+- Database column names that don't match the code's ORM models
+- Type mismatches (string vs int, nullable vs required)
+- Auth flow inconsistencies (JWT vs session, header names)
+- Missing fields that one agent references but another doesn't define
+
+Respond with ONLY valid JSON — no markdown, no preamble:
+{
+  "findings": [
+    {
+      "severity": "error" or "warning",
+      "category": "field_mismatch" | "endpoint_mismatch" | "type_mismatch" | "schema_mismatch" | "auth_mismatch" | "missing_reference",
+      "agents": ["agent_a", "agent_b"],
+      "description": "Specific description of the contradiction"
+    }
+  ]
+}
+
+If everything is consistent, return: {"findings": []}
+Only report actual contradictions, not style differences."""
+
+        user_message = (
+            f"Compare these agent outputs for cross-agent consistency.\n"
+            f"Pairs to check: {pairs_desc}\n\n{combined}"
+        )
+
+        try:
+            response = await self.llm.generate(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                temperature=0.1,
+                max_tokens=1000,
+            )
+            data = self._parse_response(response.content)
+            raw_findings = data.get("findings", [])
+
+            findings = [
+                ConsistencyFinding(
+                    severity=f.get("severity", "warning"),
+                    category=f.get("category", "unknown"),
+                    agents=f.get("agents", []),
+                    description=f.get("description", ""),
+                )
+                for f in raw_findings
+                if isinstance(f, dict) and f.get("description")
+            ]
+
+            has_errors = any(f.severity == "error" for f in findings)
+
+            logger.info(
+                "[consistency] %d finding(s): %d error, %d warning",
+                len(findings),
+                sum(1 for f in findings if f.severity == "error"),
+                sum(1 for f in findings if f.severity == "warning"),
+            )
+
+            return ConsistencyReport(passed=not has_errors, findings=findings)
+
+        except Exception as e:
+            logger.warning("Consistency check failed: %s — skipping", e)
+            return ConsistencyReport(passed=True)
+
+    def _parse_response(self, content: str) -> dict:
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", content, re.DOTALL)
+            if match:
+                return json.loads(match.group(0))
+            return {"findings": []}

@@ -17,7 +17,7 @@ from app.agents.security_auditor import SecurityAuditorAgent
 from app.agents.performance_optimizer import PerformanceOptimizerAgent
 from app.core.task_decomposer import TaskDecomposer, DecomposedTask
 from app.models.database import Task, TaskStatus, AgentType, Project
-from app.services.validation import ValidationOrchestrator
+from app.services.validation import ValidationOrchestrator, ConsistencyValidator
 from app.utils.logger import logger
 
 TASK_TIMEOUT_SECONDS = 120  # Per-task LLM timeout
@@ -56,20 +56,22 @@ _VALIDATE_AGENTS = {
 }
 
 _validator = ValidationOrchestrator()
+_consistency_validator = ConsistencyValidator()
 
 
 class OrchestratorResult:
-    def __init__(self, project_id, user_request, total_tasks, completed_tasks, failed_tasks, results):
+    def __init__(self, project_id, user_request, total_tasks, completed_tasks, failed_tasks, results, consistency=None):
         self.project_id = project_id
         self.user_request = user_request
         self.total_tasks = total_tasks
         self.completed_tasks = completed_tasks
         self.failed_tasks = failed_tasks
         self.results = results
+        self.consistency = consistency
         self.success = failed_tasks == 0
 
     def to_dict(self) -> Dict:
-        return {
+        d = {
             "project_id": self.project_id,
             "user_request": self.user_request,
             "success": self.success,
@@ -83,6 +85,9 @@ class OrchestratorResult:
                 for task_id, result in self.results.items()
             },
         }
+        if self.consistency:
+            d["consistency"] = self.consistency.to_dict()
+        return d
 
 
 class MetaAgentOrchestrator:
@@ -141,6 +146,19 @@ class MetaAgentOrchestrator:
             f"Orchestrator complete | completed={completed_count}/{len(subtasks)} | failed={failed_count}"
         )
 
+        # ── Cross-agent consistency check ────────────────────────────────────
+        consistency_report = None
+        successful_outputs = {
+            subtask.agent: results[subtask.id].output
+            for subtask in subtasks
+            if subtask.id in results and results[subtask.id].success
+        }
+        if len(successful_outputs) >= 2:
+            try:
+                consistency_report = await _consistency_validator.validate(successful_outputs)
+            except Exception as e:
+                logger.warning("Consistency validation failed: %s — skipping", e)
+
         return OrchestratorResult(
             project_id=project_id,
             user_request=user_request,
@@ -148,6 +166,7 @@ class MetaAgentOrchestrator:
             completed_tasks=completed_count,
             failed_tasks=failed_count,
             results=results,
+            consistency=consistency_report,
         )
 
     def _group_by_level(self, tasks: List[DecomposedTask]) -> List[List[DecomposedTask]]:
