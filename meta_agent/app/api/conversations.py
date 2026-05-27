@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -24,6 +25,24 @@ gatherer = RequirementsGathererAgent()
 orchestrator = MetaAgentOrchestrator()
 
 MAX_GATHERING_TURNS = 10
+
+_CONFIRM_RE = re.compile(
+    r'\b(execute|yes|go|start|proceed|run|do\s+it|build|ship|confirm|ok|okay|sure|absolutely|definitely)\b',
+    re.IGNORECASE,
+)
+
+_MODIFY_RE = re.compile(
+    r'\b(change|update|modify|edit|revise|adjust|add|remove|replace|instead|actually|wait|hold)\b',
+    re.IGNORECASE,
+)
+
+
+def _is_confirmation(message: str) -> bool:
+    return bool(_CONFIRM_RE.search(message)) and not _MODIFY_RE.search(message)
+
+
+def _is_modification(message: str) -> bool:
+    return bool(_MODIFY_RE.search(message))
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -335,21 +354,41 @@ async def send_message(
             and conversation.status == ConversationStatus.GATHERING):
         await _ask_gatherer(conversation, db)
 
-    # ── READY + trigger word: execute in background ──────────────────────────
-    elif (conversation.status == ConversationStatus.READY
-          and data.message.lower().strip() in {"execute", "yes", "go", "start", "proceed", "run"}):
+    # ── READY: decide between execute vs. modify ───────────────────────────────
+    elif conversation.status == ConversationStatus.READY:
+        if _is_confirmation(data.message):
+            check_rate_limit(current_user, db)
+            conversation.status = ConversationStatus.EXECUTING
+            flag_modified(conversation, "messages")
+            db.commit()
+            db.refresh(conversation)
 
-        check_rate_limit(current_user, db)
-        conversation.status = ConversationStatus.EXECUTING
-        flag_modified(conversation, "messages")
-        db.commit()
-        db.refresh(conversation)
+            asyncio.create_task(_execute_in_background(
+                conversation_id=conversation.id,
+                user_request=conversation.final_prompt,
+                project_id=conversation.project_id,
+            ))
 
-        asyncio.create_task(_execute_in_background(
-            conversation_id=conversation.id,
-            user_request=conversation.final_prompt,
-            project_id=conversation.project_id,
-        ))
+        elif _is_modification(data.message):
+            conversation.status = ConversationStatus.GATHERING
+            conversation.final_prompt = None
+            conversation.messages.append({
+                "role": "assistant",
+                "content": "Got it — let me update the requirements. What would you like to change?",
+            })
+            flag_modified(conversation, "messages")
+            db.commit()
+
+        else:
+            conversation.messages.append({
+                "role": "assistant",
+                "content": (
+                    "I'm ready to build. Reply **execute** to start, "
+                    "or tell me what you'd like to change."
+                ),
+            })
+            flag_modified(conversation, "messages")
+            db.commit()
 
     # ── COMPLETED: refinement in background ──────────────────────────────────
     elif conversation.status == ConversationStatus.COMPLETED:
@@ -363,17 +402,6 @@ async def send_message(
             user_request=f"Modify the previously generated code: {data.message}",
             project_id=conversation.project_id,
         ))
-
-    # ── READY but not trigger: user modifying requirements ────────────────────
-    elif conversation.status == ConversationStatus.READY:
-        conversation.status = ConversationStatus.GATHERING
-        conversation.final_prompt = None
-        conversation.messages.append({
-            "role": "assistant",
-            "content": "Got it — let me update the requirements. What would you like to change?",
-        })
-        flag_modified(conversation, "messages")
-        db.commit()
 
     db.refresh(conversation)
     return conversation
