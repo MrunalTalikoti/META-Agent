@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -534,47 +535,55 @@ async def stream_conversation_progress(
 
     async def event_generator() -> AsyncGenerator[str, None]:
         seen_task_states: dict = {}
-        poll_interval = 1.0  # seconds
-        max_polls = 120      # 2-minute hard cap
+        last_conv_status: Optional[str] = None
+        last_updated_at: Optional[datetime] = None
+        poll_interval = 2.0
+        max_polls = 180  # 6 minutes at 2s intervals
+        idle_streak = 0
 
         for _ in range(max_polls):
-            db.expire_all()
+            # Refresh only the conversation row — not the entire identity map
+            db.expire(conversation)
             conv = db.query(Conversation).filter(
                 Conversation.id == conversation_id
             ).first()
             if not conv:
                 break
 
-            tasks = (
-                db.query(Task)
-                .filter(Task.project_id == conv.project_id)
-                .order_by(Task.execution_order)
-                .all()
-            )
+            # Only query tasks when the conversation has actually been touched
+            conv_changed = conv.updated_at != last_updated_at
+            last_updated_at = conv.updated_at
 
-            for task in tasks:
-                current_status = task.status.value
-                if seen_task_states.get(task.id) != current_status:
-                    seen_task_states[task.id] = current_status
-                    event = json.dumps({
-                        "type": "task_update",
-                        "task_id": task.id,
-                        "title": task.title,
-                        "agent": task.agent_type.value,
-                        "status": current_status,
-                    })
-                    yield f"data: {event}\n\n"
+            if conv_changed:
+                idle_streak = 0
+                tasks = (
+                    db.query(Task)
+                    .filter(Task.project_id == conv.project_id)
+                    .order_by(Task.execution_order)
+                    .all()
+                )
 
+                for task in tasks:
+                    current_status = task.status.value
+                    if seen_task_states.get(task.id) != current_status:
+                        seen_task_states[task.id] = current_status
+                        yield f"data: {json.dumps({'type': 'task_update', 'task_id': task.id, 'title': task.title, 'agent': task.agent_type.value, 'status': current_status})}\n\n"
+            else:
+                idle_streak += 1
+
+            # Only emit conversation status when it changes
             conv_status = conv.status.value
-            status_event = json.dumps({
-                "type": "conversation_status",
-                "status": conv_status,
-            })
-            yield f"data: {status_event}\n\n"
+            if conv_status != last_conv_status:
+                last_conv_status = conv_status
+                yield f"data: {json.dumps({'type': 'conversation_status', 'status': conv_status})}\n\n"
 
             if conv.status in (ConversationStatus.COMPLETED, ConversationStatus.REFINING):
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
                 break
+
+            # Heartbeat so clients know the connection is alive
+            if idle_streak > 0 and idle_streak % 5 == 0:
+                yield f": heartbeat\n\n"
 
             await asyncio.sleep(poll_interval)
         else:
