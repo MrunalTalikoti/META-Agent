@@ -8,7 +8,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from pydantic import BaseModel, field_validator
 from typing import AsyncGenerator, Optional, List
 
-from app.core.database import get_db
+from app.core.database import get_db, SessionLocal
 from app.core.security import get_current_user
 from app.models.database import (
     Conversation, ConversationStatus, ExecutionMode,
@@ -153,6 +153,63 @@ async def _ask_gatherer(conversation: Conversation, db: Session) -> None:
     db.commit()
 
 
+async def _execute_in_background(
+    conversation_id: int,
+    user_request: str,
+    project_id: int,
+) -> None:
+    """Run orchestrator with its own DB session, update conversation on finish."""
+    db = SessionLocal()
+    try:
+        conversation = db.query(Conversation).filter(
+            Conversation.id == conversation_id,
+        ).first()
+        if not conversation:
+            logger.error("Background exec: conversation %d not found", conversation_id)
+            return
+
+        result = await orchestrator.process(
+            user_request=user_request,
+            project_id=project_id,
+            db=db,
+        )
+
+        first_task = (
+            db.query(Task)
+            .filter(Task.project_id == project_id)
+            .order_by(Task.id.desc())
+            .first()
+        )
+        if first_task:
+            conversation.execution_task_id = first_task.id
+
+        conversation.status = ConversationStatus.COMPLETED
+        conversation.messages.append({
+            "role": "assistant",
+            "content": "Execution complete! Here are your results:",
+            "result": result.to_dict(),
+        })
+        logger.info("Background exec completed for conversation %d", conversation_id)
+
+    except Exception as e:
+        logger.error("Background exec failed for conversation %d: %s", conversation_id, e, exc_info=True)
+        conversation = db.query(Conversation).filter(
+            Conversation.id == conversation_id,
+        ).first()
+        if conversation:
+            conversation.status = ConversationStatus.COMPLETED
+            conversation.messages.append({
+                "role": "assistant",
+                "content": f"Execution failed: {str(e)}",
+            })
+
+    finally:
+        if conversation:
+            flag_modified(conversation, "messages")
+            db.commit()
+        db.close()
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
@@ -161,7 +218,6 @@ async def start_conversation(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # Rate limit
     check_rate_limit(current_user, db)
 
     project = db.query(Project).filter(
@@ -184,40 +240,27 @@ async def start_conversation(
     db.commit()
     db.refresh(conversation)
 
-    logger.info(f"Conversation {conversation.id} started | mode={mode.value} | user={current_user.email}")
+    logger.info("Conversation %d started | mode=%s | user=%s", conversation.id, mode.value, current_user.email)
 
-    # ── NORMAL MODE: execute immediately ──────────────────────────────────────
+    # ── NORMAL MODE: kick off background execution, return immediately ───────
     if mode == ExecutionMode.NORMAL:
         conversation.status = ConversationStatus.EXECUTING
         conversation.final_prompt = data.initial_message
-        db.commit()
-        try:
-            result = await orchestrator.process(
-                user_request=data.initial_message,
-                project_id=data.project_id,
-                db=db,
-            )
-            conversation.status = ConversationStatus.COMPLETED
-            conversation.messages.append({
-                "role": "assistant",
-                "content": "✓ Execution complete! See results below.",
-                "result": result.to_dict(),
-            })
-        except Exception as e:
-            logger.error(f"Execution failed: {e}", exc_info=True)
-            conversation.status = ConversationStatus.COMPLETED
-            conversation.messages.append({
-                "role": "assistant",
-                "content": f"✗ Execution failed: {str(e)}",
-            })
         flag_modified(conversation, "messages")
         db.commit()
+        db.refresh(conversation)
 
-    # ── HARDCORE MODE: start gathering ────────────────────────────────────────
+        asyncio.create_task(_execute_in_background(
+            conversation_id=conversation.id,
+            user_request=data.initial_message,
+            project_id=data.project_id,
+        ))
+
+    # ── HARDCORE MODE: start gathering (fast — no orchestrator) ───────────────
     else:
         await _ask_gatherer(conversation, db)
+        db.refresh(conversation)
 
-    db.refresh(conversation)
     return conversation
 
 
@@ -235,7 +278,6 @@ async def send_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # Append user message
     conversation.messages.append({"role": "user", "content": data.message})
     flag_modified(conversation, "messages")
     db.commit()
@@ -245,70 +287,34 @@ async def send_message(
             and conversation.status == ConversationStatus.GATHERING):
         await _ask_gatherer(conversation, db)
 
-    # ── READY + trigger word: execute ─────────────────────────────────────────
+    # ── READY + trigger word: execute in background ──────────────────────────
     elif (conversation.status == ConversationStatus.READY
           and data.message.lower().strip() in {"execute", "yes", "go", "start", "proceed", "run"}):
 
         check_rate_limit(current_user, db)
         conversation.status = ConversationStatus.EXECUTING
-        db.commit()
-
-        try:
-            result = await orchestrator.process(
-                user_request=conversation.final_prompt,
-                project_id=conversation.project_id,
-                db=db,
-            )
-            # Set execution_task_id to first task created (approximate link)
-            first_task = db.query(Task).filter(
-                Task.project_id == conversation.project_id
-            ).order_by(Task.id.desc()).first()
-            if first_task:
-                conversation.execution_task_id = first_task.id
-
-            conversation.status = ConversationStatus.COMPLETED
-            conversation.messages.append({
-                "role": "assistant",
-                "content": "✓ Execution complete! Here are your results:",
-                "result": result.to_dict(),
-            })
-        except Exception as e:
-            logger.error(f"Execution failed: {e}", exc_info=True)
-            conversation.status = ConversationStatus.COMPLETED
-            conversation.messages.append({
-                "role": "assistant",
-                "content": f"✗ Execution failed: {str(e)}",
-            })
         flag_modified(conversation, "messages")
         db.commit()
+        db.refresh(conversation)
 
-    # ── COMPLETED: refinement ─────────────────────────────────────────────────
+        asyncio.create_task(_execute_in_background(
+            conversation_id=conversation.id,
+            user_request=conversation.final_prompt,
+            project_id=conversation.project_id,
+        ))
+
+    # ── COMPLETED: refinement in background ──────────────────────────────────
     elif conversation.status == ConversationStatus.COMPLETED:
         check_rate_limit(current_user, db)
         conversation.status = ConversationStatus.REFINING
         db.commit()
-        try:
-            refinement_prompt = f"Modify the previously generated code: {data.message}"
-            result = await orchestrator.process(
-                user_request=refinement_prompt,
-                project_id=conversation.project_id,
-                db=db,
-            )
-            conversation.status = ConversationStatus.COMPLETED
-            conversation.messages.append({
-                "role": "assistant",
-                "content": "✓ Refinement complete!",
-                "result": result.to_dict(),
-            })
-        except Exception as e:
-            logger.error(f"Refinement failed: {e}", exc_info=True)
-            conversation.status = ConversationStatus.COMPLETED
-            conversation.messages.append({
-                "role": "assistant",
-                "content": f"✗ Refinement failed: {str(e)}",
-            })
-        flag_modified(conversation, "messages")
-        db.commit()
+        db.refresh(conversation)
+
+        asyncio.create_task(_execute_in_background(
+            conversation_id=conversation.id,
+            user_request=f"Modify the previously generated code: {data.message}",
+            project_id=conversation.project_id,
+        ))
 
     # ── READY but not trigger: user modifying requirements ────────────────────
     elif conversation.status == ConversationStatus.READY:
@@ -389,7 +395,6 @@ async def stream_conversation_progress(
         max_polls = 120      # 2-minute hard cap
 
         for _ in range(max_polls):
-            # Refresh conversation and its project tasks from DB
             db.expire_all()
             conv = db.query(Conversation).filter(
                 Conversation.id == conversation_id
@@ -417,7 +422,6 @@ async def stream_conversation_progress(
                     })
                     yield f"data: {event}\n\n"
 
-            # Emit conversation status on each change
             conv_status = conv.status.value
             status_event = json.dumps({
                 "type": "conversation_status",
@@ -425,7 +429,7 @@ async def stream_conversation_progress(
             })
             yield f"data: {status_event}\n\n"
 
-            if conv.status == ConversationStatus.COMPLETED:
+            if conv.status in (ConversationStatus.COMPLETED, ConversationStatus.REFINING):
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
                 break
 
