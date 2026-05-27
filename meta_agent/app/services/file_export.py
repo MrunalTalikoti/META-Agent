@@ -103,23 +103,15 @@ class FileExportService:
                 agent_name = task.agent_type.value.lower()
                 output = task.output_data
 
-                # Resolve "code_generator" etc from the title when agent_type is overloaded
-                title_agent = task.title.split(": ")[-1].strip() if ": " in task.title else agent_name
-                effective_agent = title_agent if title_agent in (
-                    "code_generator", "api_designer", "database_schema", "testing_agent",
-                    "documentation_agent", "frontend_generator", "devops",
-                    "security_auditor", "performance_optimizer"
-                ) else agent_name
-
                 try:
-                    files = _extract_file(effective_agent, output)
+                    files = _extract_file(agent_name, output)
                 except Exception as e:
                     logger.warning(f"Could not extract files from task {task.id}: {e}")
                     files = []
 
                 for filename, content in files:
                     zf.writestr(filename, content)
-                    manifest_lines.append(f"- {filename}  (from {effective_agent})")
+                    manifest_lines.append(f"- {filename}  (from {agent_name})")
 
             zf.writestr("MANIFEST.md", "\n".join(manifest_lines))
 
@@ -133,13 +125,12 @@ class FileExportService:
             if task.status != TaskStatus.COMPLETED or not task.output_data:
                 continue
             agent_name = task.agent_type.value.lower()
-            title_agent = task.title.split(": ")[-1].strip() if ": " in task.title else agent_name
             try:
-                files = _extract_file(title_agent, task.output_data)
+                files = _extract_file(agent_name, task.output_data)
                 for fname, content in files:
                     summary.append({
                         "filename": fname,
-                        "agent": title_agent,
+                        "agent": agent_name,
                         "size_bytes": len(content.encode("utf-8")),
                     })
             except Exception:
