@@ -76,12 +76,15 @@ async def test_register(client):
         json={"email": "newuser@example.com", "password": "password123"},
     )
     assert resp.status_code == 201
-    assert resp.json()["email"] == "newuser@example.com"
+    data = resp.json()
+    assert "access_token" in data
+    assert data["token_type"] == "bearer"
+    assert len(data["access_token"]) > 0
 
 
 @pytest.mark.asyncio
 async def test_register_duplicate_email(client):
-    payload = {"email": "dup@example.com", "password": "pass"}
+    payload = {"email": "dup@example.com", "password": "password123"}
     await client.post("/api/auth/register", json=payload)
     resp = await client.post("/api/auth/register", json=payload)
     assert resp.status_code == 409
