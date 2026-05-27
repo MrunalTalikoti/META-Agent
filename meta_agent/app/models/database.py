@@ -46,6 +46,7 @@ class ConversationStatus(enum.Enum):
     EXECUTING = "executing"
     COMPLETED = "completed"
     REFINING = "refining"
+    FAILED = "failed"
 
 
 class UserTier(enum.Enum):
@@ -118,6 +119,7 @@ class Conversation(Base):
 
     # For HARDCORE mode: accumulated requirements
     gathered_requirements = Column(JSON, nullable=True)
+    gathering_turn_count = Column(Integer, default=0, nullable=False, server_default="0")
     
     # Final consolidated prompt (set when status → READY)
     final_prompt = Column(Text, nullable=True)

@@ -23,6 +23,8 @@ router = APIRouter()
 gatherer = RequirementsGathererAgent()
 orchestrator = MetaAgentOrchestrator()
 
+MAX_GATHERING_TURNS = 10
+
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -67,6 +69,7 @@ class ConversationResponse(BaseModel):
     messages: List[dict]
     gathered_requirements: Optional[dict] = None
     final_prompt: Optional[str] = None
+    gathering_turn_count: int = 0
 
     class Config:
         from_attributes = True
@@ -84,11 +87,41 @@ def _make_gathering_task(project_id: int, title: str = "Requirements Gathering")
     )
 
 
+def _force_ready_with_fallback(conversation: Conversation) -> None:
+    """Transition to READY using whatever requirements have been gathered so far."""
+    gathered = conversation.gathered_requirements or {}
+    conversation.status = ConversationStatus.READY
+    conversation.final_prompt = json.dumps(gathered) if gathered else conversation.messages[0].get("content", "")
+    conversation.messages.append({
+        "role": "assistant",
+        "content": (
+            f"Gathering limit reached ({MAX_GATHERING_TURNS} turns). "
+            "Proceeding with the requirements collected so far.\n\n"
+            "Reply **execute** to start building, or send a message to adjust."
+        ),
+    })
+
+
 async def _ask_gatherer(conversation: Conversation, db: Session) -> None:
     """
     Run requirements gatherer using proper multi-turn history (run_with_history).
     Updates conversation messages and gathered_requirements in place.
+
+    Enforces a max turn limit and transitions out of GATHERING on failure.
     """
+    conversation.gathering_turn_count += 1
+
+    # ── Max turns exceeded: force-transition to READY ────────────────────────
+    if conversation.gathering_turn_count > MAX_GATHERING_TURNS:
+        logger.warning(
+            "Conversation %d hit gathering turn limit (%d)",
+            conversation.id, MAX_GATHERING_TURNS,
+        )
+        _force_ready_with_fallback(conversation)
+        flag_modified(conversation, "messages")
+        db.commit()
+        return
+
     gathering_task = _make_gathering_task(conversation.project_id, "Requirements Gathering (turn)")
     db.add(gathering_task)
     db.flush()
@@ -133,20 +166,35 @@ async def _ask_gatherer(conversation: Conversation, db: Session) -> None:
                 })
 
         else:
-            conversation.messages.append({
-                "role": "assistant",
-                "content": f"Sorry, I encountered an error: {result.error}",
-            })
+            # Agent returned an error result but didn't throw — recoverable
+            logger.warning("Gatherer returned error for conversation %d: %s", conversation.id, result.error)
+            if gathered:
+                _force_ready_with_fallback(conversation)
+            else:
+                conversation.status = ConversationStatus.FAILED
+                conversation.messages.append({
+                    "role": "assistant",
+                    "content": f"Requirements gathering failed: {result.error}",
+                })
 
         gathering_task.status = TaskStatus.COMPLETED
+
     except Exception as e:
-        logger.error(f"Requirements gathering failed: {e}", exc_info=True)
+        logger.error("Requirements gathering failed for conversation %d: %s", conversation.id, e, exc_info=True)
         gathering_task.status = TaskStatus.FAILED
         gathering_task.error_message = str(e)
-        conversation.messages.append({
-            "role": "assistant",
-            "content": f"Sorry, something went wrong: {str(e)}",
-        })
+
+        if gathered:
+            _force_ready_with_fallback(conversation)
+        else:
+            conversation.status = ConversationStatus.FAILED
+            conversation.messages.append({
+                "role": "assistant",
+                "content": (
+                    f"Requirements gathering encountered an error: {e}\n\n"
+                    "Use the reset endpoint to try again."
+                ),
+            })
 
     flag_modified(conversation, "messages")
     flag_modified(conversation, "gathered_requirements")
@@ -445,6 +493,49 @@ async def stream_conversation_progress(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/{conversation_id}/reset", response_model=ConversationResponse)
+async def reset_conversation(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Reset a stuck or failed conversation back to GATHERING so the user
+    can restart the requirements flow.  Preserves message history.
+    """
+    conversation = db.query(Conversation).filter(
+        Conversation.id == conversation_id,
+        Conversation.user_id == current_user.id,
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    if conversation.status not in (
+        ConversationStatus.GATHERING,
+        ConversationStatus.FAILED,
+        ConversationStatus.READY,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot reset conversation in '{conversation.status.value}' state",
+        )
+
+    conversation.status = ConversationStatus.GATHERING
+    conversation.gathering_turn_count = 0
+    conversation.gathered_requirements = None
+    conversation.final_prompt = None
+    conversation.messages.append({
+        "role": "assistant",
+        "content": "Conversation has been reset. Let's start gathering requirements again — what would you like to build?",
+    })
+    flag_modified(conversation, "messages")
+    db.commit()
+    db.refresh(conversation)
+
+    logger.info("Conversation %d reset by user %s", conversation.id, current_user.email)
+    return conversation
 
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
