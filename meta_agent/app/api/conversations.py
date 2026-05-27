@@ -106,6 +106,65 @@ def _make_gathering_task(project_id: int, title: str = "Requirements Gathering")
     )
 
 
+_MAX_CONTEXT_CHARS = 12_000
+
+
+def _extract_prior_result(conversation: Conversation) -> Optional[dict]:
+    """Walk messages newest-first and return the first embedded result dict."""
+    for msg in reversed(conversation.messages):
+        if msg.get("role") == "assistant" and isinstance(msg.get("result"), dict):
+            return msg["result"]
+    return None
+
+
+def _build_refinement_context(prior_result: dict) -> str:
+    """Flatten agent outputs into a text summary the decomposer can use."""
+    sections: list[str] = []
+
+    results = prior_result.get("results") or prior_result.get("task_results") or {}
+    if not results:
+        raw = json.dumps(prior_result, indent=2)
+        return raw[:_MAX_CONTEXT_CHARS]
+
+    for task_id, task_data in results.items():
+        output = task_data.get("output", {})
+        agent = task_data.get("agent", f"task_{task_id}")
+        header = f"── {agent} (task {task_id}) ──"
+
+        if agent == "code_generator":
+            code = output.get("code") or output.get("raw_output", "")
+            sections.append(f"{header}\n```\n{code}\n```")
+
+        elif agent == "api_designer":
+            spec = json.dumps(output.get("api_design", output), indent=2)
+            sections.append(f"{header}\n{spec}")
+
+        elif agent == "database_schema":
+            sql = output.get("sql_ddl", "")
+            schema = json.dumps(output.get("schema", {}), indent=2) if output.get("schema") else ""
+            sections.append(f"{header}\n{sql}\n{schema}")
+
+        elif agent == "frontend_generator":
+            for i, comp in enumerate(output.get("components", [])):
+                sections.append(f"{header} component {i+1}\n```\n{comp}\n```")
+
+        elif agent in ("testing_agent", "documentation_agent"):
+            text = output.get("test_code") or output.get("documentation") or output.get("raw_output", "")
+            sections.append(f"{header}\n{text}")
+
+        elif agent == "devops":
+            for fname, content in output.get("files", {}).items():
+                sections.append(f"{header} {fname}\n{content}")
+
+        else:
+            sections.append(f"{header}\n{json.dumps(output, indent=2)}")
+
+    combined = "\n\n".join(sections)
+    if len(combined) > _MAX_CONTEXT_CHARS:
+        combined = combined[:_MAX_CONTEXT_CHARS] + "\n... (truncated)"
+    return combined
+
+
 def _force_ready_with_fallback(conversation: Conversation) -> None:
     """Transition to READY using whatever requirements have been gathered so far."""
     gathered = conversation.gathered_requirements or {}
@@ -224,6 +283,7 @@ async def _execute_in_background(
     conversation_id: int,
     user_request: str,
     project_id: int,
+    project_context: Optional[str] = None,
 ) -> None:
     """Run orchestrator with its own DB session, update conversation on finish."""
     db = SessionLocal()
@@ -239,6 +299,7 @@ async def _execute_in_background(
             user_request=user_request,
             project_id=project_id,
             db=db,
+            project_context=project_context,
         )
 
         first_task = (
@@ -397,10 +458,16 @@ async def send_message(
         db.commit()
         db.refresh(conversation)
 
+        prior = _extract_prior_result(conversation)
+        context = _build_refinement_context(prior) if prior else None
+        if not context:
+            logger.warning("Conversation %d: no prior result found for refinement", conversation.id)
+
         asyncio.create_task(_execute_in_background(
             conversation_id=conversation.id,
-            user_request=f"Modify the previously generated code: {data.message}",
+            user_request=f"Refinement request: {data.message}",
             project_id=conversation.project_id,
+            project_context=context,
         ))
 
     db.refresh(conversation)
