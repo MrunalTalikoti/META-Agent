@@ -168,7 +168,7 @@ class BaseAgent(ABC):
                     error=error_msg,
                 )
             cost_usd = llm_response.estimated_cost_usd()
-            cost_monitor.track(cost_usd)
+            await cost_monitor.track(cost_usd)
 
         # ── Parse output ─────────────────────────────────────────────────────
         try:
