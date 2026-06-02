@@ -227,96 +227,100 @@ async def _ask_gatherer(conversation: Conversation) -> None:
             logger.error("_ask_gatherer: conversation %d not found", conversation_id)
             return
 
-        conversation.gathering_turn_count += 1
-
-        # ── Max turns exceeded: force-transition to READY ────────────────────
-        if conversation.gathering_turn_count > MAX_GATHERING_TURNS:
-            logger.warning(
-                "Conversation %d hit gathering turn limit (%d)",
-                conversation.id, MAX_GATHERING_TURNS,
-            )
-            _force_ready_with_fallback(conversation)
-            flag_modified(conversation, "messages")
-            db.commit()
-            return
-
-        gathering_task = _make_gathering_task(conversation.project_id, "Requirements Gathering (turn)")
-        db.add(gathering_task)
-        db.flush()
-
-        gathered = conversation.gathered_requirements or {}
-
         try:
-            result = await gatherer.run_with_history(
-                conversation_messages=conversation.messages,
-                gathered_so_far=gathered,
-                task_db_record=gathering_task,
-                db=db,
-            )
+            conversation.gathering_turn_count += 1
 
-            if result.success:
-                output = result.output
-                status_val = output.get("status")
+            # ── Max turns exceeded: force-transition to READY ────────────────
+            if conversation.gathering_turn_count > MAX_GATHERING_TURNS:
+                logger.warning(
+                    "Conversation %d hit gathering turn limit (%d)",
+                    conversation.id, MAX_GATHERING_TURNS,
+                )
+                _force_ready_with_fallback(conversation)
+                return  # JSON flags + commit still run in `finally`
 
-                if status_val == "needs_clarification":
-                    conversation.messages.append({
-                        "role": "assistant",
-                        "content": output["question"],
-                    })
-                    conversation.gathered_requirements = output.get("gathered_so_far", gathered)
+            gathering_task = _make_gathering_task(conversation.project_id, "Requirements Gathering (turn)")
+            db.add(gathering_task)
+            db.flush()
 
-                elif status_val == "ready":
-                    conversation.status = ConversationStatus.READY
-                    conversation.final_prompt = output["final_prompt"]
-                    conversation.gathered_requirements = output.get("requirements_summary", {})
-                    conversation.messages.append({
-                        "role": "assistant",
-                        "content": (
-                            f"I have everything I need.\n\n"
-                            f"**Final specification:**\n{output['final_prompt']}\n\n"
-                            f"Reply **execute** to start building, or tell me what to change."
-                        ),
-                    })
+            gathered = conversation.gathered_requirements or {}
+
+            try:
+                result = await gatherer.run_with_history(
+                    conversation_messages=conversation.messages,
+                    gathered_so_far=gathered,
+                    task_db_record=gathering_task,
+                    db=db,
+                )
+
+                if result.success:
+                    output = result.output
+                    status_val = output.get("status")
+
+                    if status_val == "needs_clarification":
+                        conversation.messages.append({
+                            "role": "assistant",
+                            "content": output["question"],
+                        })
+                        conversation.gathered_requirements = output.get("gathered_so_far", gathered)
+
+                    elif status_val == "ready":
+                        conversation.status = ConversationStatus.READY
+                        conversation.final_prompt = output["final_prompt"]
+                        conversation.gathered_requirements = output.get("requirements_summary", {})
+                        conversation.messages.append({
+                            "role": "assistant",
+                            "content": (
+                                f"I have everything I need.\n\n"
+                                f"**Final specification:**\n{output['final_prompt']}\n\n"
+                                f"Reply **execute** to start building, or tell me what to change."
+                            ),
+                        })
+                    else:
+                        conversation.messages.append({
+                            "role": "assistant",
+                            "content": "I had trouble parsing that. Could you rephrase?",
+                        })
+
                 else:
-                    conversation.messages.append({
-                        "role": "assistant",
-                        "content": "I had trouble parsing that. Could you rephrase?",
-                    })
+                    # Agent returned an error result but didn't throw — recoverable
+                    logger.warning("Gatherer returned error for conversation %d: %s", conversation.id, result.error)
+                    if gathered:
+                        _force_ready_with_fallback(conversation)
+                    else:
+                        conversation.status = ConversationStatus.FAILED
+                        conversation.messages.append({
+                            "role": "assistant",
+                            "content": f"Requirements gathering failed: {result.error}",
+                        })
 
-            else:
-                # Agent returned an error result but didn't throw — recoverable
-                logger.warning("Gatherer returned error for conversation %d: %s", conversation.id, result.error)
+                gathering_task.status = TaskStatus.COMPLETED
+
+            except Exception as e:
+                logger.error("Requirements gathering failed for conversation %d: %s", conversation.id, e, exc_info=True)
+                gathering_task.status = TaskStatus.FAILED
+                gathering_task.error_message = str(e)
+
                 if gathered:
                     _force_ready_with_fallback(conversation)
                 else:
                     conversation.status = ConversationStatus.FAILED
                     conversation.messages.append({
                         "role": "assistant",
-                        "content": f"Requirements gathering failed: {result.error}",
+                        "content": (
+                            f"Requirements gathering encountered an error: {e}\n\n"
+                            "Use the reset endpoint to try again."
+                        ),
                     })
 
-            gathering_task.status = TaskStatus.COMPLETED
-
-        except Exception as e:
-            logger.error("Requirements gathering failed for conversation %d: %s", conversation.id, e, exc_info=True)
-            gathering_task.status = TaskStatus.FAILED
-            gathering_task.error_message = str(e)
-
-            if gathered:
-                _force_ready_with_fallback(conversation)
-            else:
-                conversation.status = ConversationStatus.FAILED
-                conversation.messages.append({
-                    "role": "assistant",
-                    "content": (
-                        f"Requirements gathering encountered an error: {e}\n\n"
-                        "Use the reset endpoint to try again."
-                    ),
-                })
-
-        flag_modified(conversation, "messages")
-        flag_modified(conversation, "gathered_requirements")
-        db.commit()
+        finally:
+            # JSON mutation tracking — SQLAlchemy does not detect in-place
+            # list/dict edits (e.g. messages.append). Flag BOTH JSON columns on
+            # EVERY branch (including the max-turns early return above) so no
+            # update is silently dropped, then commit exactly once.
+            flag_modified(conversation, "messages")
+            flag_modified(conversation, "gathered_requirements")
+            db.commit()
 
 
 async def _execute_in_background(
