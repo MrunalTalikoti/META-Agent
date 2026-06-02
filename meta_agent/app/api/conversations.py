@@ -609,10 +609,16 @@ async def stream_conversation_progress(
 
             if conv_changed:
                 idle_streak = 0
+                # populate_existing(): the orchestrator mutates Task rows from a
+                # SEPARATE session, so without this the identity map would hand
+                # back stale Task instances (the fresh SELECT does not overwrite
+                # already-loaded attributes) and task_update events would stop
+                # firing. This refreshes in-place WITHOUT issuing any extra query.
                 tasks = (
                     db.query(Task)
                     .filter(Task.project_id == conv.project_id)
                     .order_by(Task.execution_order)
+                    .populate_existing()
                     .all()
                 )
 
