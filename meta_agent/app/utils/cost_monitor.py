@@ -41,9 +41,12 @@ class CostMonitor:
                     f"Daily cost limit exceeded: ${self.daily_spend:.4f} > ${self.daily_limit}"
                 )
 
-    def reset(self):
-        logger.info(f"CostMonitor: daily reset | total spent today=${self.daily_spend:.4f}")
-        self.daily_spend = 0.0
+    async def reset(self):
+        # Acquire the same lock track() uses so a midnight reset can't race a
+        # concurrent read-add-check and clobber an in-flight spend update.
+        async with self._lock:
+            logger.info("CostMonitor: daily reset | spent=$%.4f", self.daily_spend)
+            self.daily_spend = 0.0
 
 
 cost_monitor = CostMonitor(daily_limit_usd=5.0)
