@@ -181,103 +181,120 @@ def _force_ready_with_fallback(conversation: Conversation) -> None:
     })
 
 
-async def _ask_gatherer(conversation: Conversation, db: Session) -> None:
+async def _ask_gatherer(conversation: Conversation) -> None:
     """
     Run requirements gatherer using proper multi-turn history (run_with_history).
     Updates conversation messages and gathered_requirements in place.
 
+    Owns its own DB session (``SessionLocal``) for the full duration of the
+    async gatherer call.  It never borrows the caller's request-scoped session,
+    because awaiting the agent yields control back to the event loop and any
+    session it touched could be mutated concurrently by another coroutine.
+    The conversation is re-loaded inside the local session by id; callers must
+    ``db.refresh(conversation)`` afterwards to observe the committed changes.
+
     Enforces a max turn limit and transitions out of GATHERING on failure.
     """
-    conversation.gathering_turn_count += 1
+    conversation_id = conversation.id
 
-    # ── Max turns exceeded: force-transition to READY ────────────────────────
-    if conversation.gathering_turn_count > MAX_GATHERING_TURNS:
-        logger.warning(
-            "Conversation %d hit gathering turn limit (%d)",
-            conversation.id, MAX_GATHERING_TURNS,
-        )
-        _force_ready_with_fallback(conversation)
-        flag_modified(conversation, "messages")
-        db.commit()
-        return
+    with SessionLocal() as db:
+        conversation = db.query(Conversation).filter(
+            Conversation.id == conversation_id,
+        ).first()
+        if conversation is None:
+            logger.error("_ask_gatherer: conversation %d not found", conversation_id)
+            return
 
-    gathering_task = _make_gathering_task(conversation.project_id, "Requirements Gathering (turn)")
-    db.add(gathering_task)
-    db.flush()
+        conversation.gathering_turn_count += 1
 
-    gathered = conversation.gathered_requirements or {}
+        # ── Max turns exceeded: force-transition to READY ────────────────────
+        if conversation.gathering_turn_count > MAX_GATHERING_TURNS:
+            logger.warning(
+                "Conversation %d hit gathering turn limit (%d)",
+                conversation.id, MAX_GATHERING_TURNS,
+            )
+            _force_ready_with_fallback(conversation)
+            flag_modified(conversation, "messages")
+            db.commit()
+            return
 
-    try:
-        result = await gatherer.run_with_history(
-            conversation_messages=conversation.messages,
-            gathered_so_far=gathered,
-            task_db_record=gathering_task,
-            db=db,
-        )
+        gathering_task = _make_gathering_task(conversation.project_id, "Requirements Gathering (turn)")
+        db.add(gathering_task)
+        db.flush()
 
-        if result.success:
-            output = result.output
-            status_val = output.get("status")
+        gathered = conversation.gathered_requirements or {}
 
-            if status_val == "needs_clarification":
-                conversation.messages.append({
-                    "role": "assistant",
-                    "content": output["question"],
-                })
-                conversation.gathered_requirements = output.get("gathered_so_far", gathered)
+        try:
+            result = await gatherer.run_with_history(
+                conversation_messages=conversation.messages,
+                gathered_so_far=gathered,
+                task_db_record=gathering_task,
+                db=db,
+            )
 
-            elif status_val == "ready":
-                conversation.status = ConversationStatus.READY
-                conversation.final_prompt = output["final_prompt"]
-                conversation.gathered_requirements = output.get("requirements_summary", {})
-                conversation.messages.append({
-                    "role": "assistant",
-                    "content": (
-                        f"I have everything I need.\n\n"
-                        f"**Final specification:**\n{output['final_prompt']}\n\n"
-                        f"Reply **execute** to start building, or tell me what to change."
-                    ),
-                })
+            if result.success:
+                output = result.output
+                status_val = output.get("status")
+
+                if status_val == "needs_clarification":
+                    conversation.messages.append({
+                        "role": "assistant",
+                        "content": output["question"],
+                    })
+                    conversation.gathered_requirements = output.get("gathered_so_far", gathered)
+
+                elif status_val == "ready":
+                    conversation.status = ConversationStatus.READY
+                    conversation.final_prompt = output["final_prompt"]
+                    conversation.gathered_requirements = output.get("requirements_summary", {})
+                    conversation.messages.append({
+                        "role": "assistant",
+                        "content": (
+                            f"I have everything I need.\n\n"
+                            f"**Final specification:**\n{output['final_prompt']}\n\n"
+                            f"Reply **execute** to start building, or tell me what to change."
+                        ),
+                    })
+                else:
+                    conversation.messages.append({
+                        "role": "assistant",
+                        "content": "I had trouble parsing that. Could you rephrase?",
+                    })
+
             else:
-                conversation.messages.append({
-                    "role": "assistant",
-                    "content": "I had trouble parsing that. Could you rephrase?",
-                })
+                # Agent returned an error result but didn't throw — recoverable
+                logger.warning("Gatherer returned error for conversation %d: %s", conversation.id, result.error)
+                if gathered:
+                    _force_ready_with_fallback(conversation)
+                else:
+                    conversation.status = ConversationStatus.FAILED
+                    conversation.messages.append({
+                        "role": "assistant",
+                        "content": f"Requirements gathering failed: {result.error}",
+                    })
 
-        else:
-            # Agent returned an error result but didn't throw — recoverable
-            logger.warning("Gatherer returned error for conversation %d: %s", conversation.id, result.error)
+            gathering_task.status = TaskStatus.COMPLETED
+
+        except Exception as e:
+            logger.error("Requirements gathering failed for conversation %d: %s", conversation.id, e, exc_info=True)
+            gathering_task.status = TaskStatus.FAILED
+            gathering_task.error_message = str(e)
+
             if gathered:
                 _force_ready_with_fallback(conversation)
             else:
                 conversation.status = ConversationStatus.FAILED
                 conversation.messages.append({
                     "role": "assistant",
-                    "content": f"Requirements gathering failed: {result.error}",
+                    "content": (
+                        f"Requirements gathering encountered an error: {e}\n\n"
+                        "Use the reset endpoint to try again."
+                    ),
                 })
 
-        gathering_task.status = TaskStatus.COMPLETED
-
-    except Exception as e:
-        logger.error("Requirements gathering failed for conversation %d: %s", conversation.id, e, exc_info=True)
-        gathering_task.status = TaskStatus.FAILED
-        gathering_task.error_message = str(e)
-
-        if gathered:
-            _force_ready_with_fallback(conversation)
-        else:
-            conversation.status = ConversationStatus.FAILED
-            conversation.messages.append({
-                "role": "assistant",
-                "content": (
-                    f"Requirements gathering encountered an error: {e}\n\n"
-                    "Use the reset endpoint to try again."
-                ),
-            })
-
-    flag_modified(conversation, "messages")
-    flag_modified(conversation, "gathered_requirements")
-    db.commit()
+        flag_modified(conversation, "messages")
+        flag_modified(conversation, "gathered_requirements")
+        db.commit()
 
 
 async def _execute_in_background(
@@ -387,7 +404,9 @@ async def start_conversation(
 
     # ── HARDCORE MODE: start gathering (fast — no orchestrator) ───────────────
     else:
-        await _ask_gatherer(conversation, db)
+        await _ask_gatherer(conversation)
+        # _ask_gatherer committed via its own session; reload into the request
+        # session so the response reflects the gathered state.
         db.refresh(conversation)
 
     return conversation
@@ -414,7 +433,9 @@ async def send_message(
     # ── GATHERING: continue questions ─────────────────────────────────────────
     if (conversation.mode == ExecutionMode.HARDCORE
             and conversation.status == ConversationStatus.GATHERING):
-        await _ask_gatherer(conversation, db)
+        await _ask_gatherer(conversation)
+        # _ask_gatherer owns its own session; refresh below (line ~474) reloads
+        # the committed changes into the request session before responding.
 
     # ── READY: decide between execute vs. modify ───────────────────────────────
     elif conversation.status == ConversationStatus.READY:
