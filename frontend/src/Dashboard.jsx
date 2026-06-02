@@ -11,14 +11,14 @@ function firstUserMessage(conv) {
 
 function StatusDot({ status }) {
   const color =
-    status === 'completed' ? 'rgba(255,255,255,0.5)' :
-    status === 'executing' ? '#fff' :
+    status === 'COMPLETED' ? 'rgba(255,255,255,0.5)' :
+    status === 'EXECUTING' ? '#fff' :
     'rgba(255,255,255,0.18)';
   return (
     <span style={{
       display: 'inline-block', width: '6px', height: '6px',
       borderRadius: '50%', background: color, flexShrink: 0,
-    }} className={status === 'executing' ? 'animate-blink' : ''} />
+    }} className={status === 'EXECUTING' ? 'animate-blink' : ''} />
   );
 }
 
@@ -305,10 +305,10 @@ export default function Dashboard() {
                       <span style={{
                         fontSize: '10px', fontWeight: 600, letterSpacing: '0.08em',
                         textTransform: 'uppercase', flexShrink: 0,
-                        color: c.status === 'completed' ? 'rgba(255,255,255,0.45)' :
-                               c.status === 'executing' ? '#fff' : 'rgba(255,255,255,0.25)',
+                        color: c.status === 'COMPLETED' ? 'rgba(255,255,255,0.45)' :
+                               c.status === 'EXECUTING' ? '#fff' : 'rgba(255,255,255,0.25)',
                       }}>
-                        {c.status.replace(/_/g, ' ')}
+                        {c.status.toLowerCase().replace(/_/g, ' ')}
                       </span>
                     </button>
                   );

@@ -15,9 +15,9 @@ function firstUserMessage(conv) {
 }
 
 function StatusDot({ status }) {
-  if (status === 'completed')
+  if (status === 'COMPLETED')
     return <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '10px' }}>✓</span>;
-  if (status === 'executing')
+  if (status === 'EXECUTING')
     return <span style={{ color: '#fff', fontSize: '10px' }} className="animate-blink">●</span>;
   return <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: '10px' }}>○</span>;
 }

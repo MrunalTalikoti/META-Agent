@@ -41,12 +41,16 @@ class ExecutionMode(enum.Enum):
 
 
 class ConversationStatus(enum.Enum):
-    GATHERING = "gathering_requirements"
-    READY = "ready_to_execute"
-    EXECUTING = "executing"
-    COMPLETED = "completed"
-    REFINING = "refining"
-    FAILED = "failed"
+    # NOTE: SQLAlchemy's Enum type persists the member *name* (not the value).
+    # The DB enum labels created by the migrations are the uppercase names
+    # below, so we keep value == name to make the wire format (Pydantic / SSE
+    # serialize the *value*) match what the database actually stores.
+    GATHERING = "GATHERING"
+    READY = "READY"
+    EXECUTING = "EXECUTING"
+    COMPLETED = "COMPLETED"
+    REFINING = "REFINING"
+    FAILED = "FAILED"
 
 
 class UserTier(enum.Enum):

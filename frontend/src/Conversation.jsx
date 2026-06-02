@@ -76,15 +76,15 @@ function RequirementsPanel({ requirements }) {
 function StatusBadge({ status, isExecuting }) {
   const executing = isExecuting;
   const color =
-    status === 'completed' && !executing ? '#fff'    :
+    status === 'COMPLETED' && !executing ? '#fff'    :
     executing                            ? '#fff'    :
     'rgba(255,255,255,0.35)';
   const bg =
-    status === 'completed' && !executing ? 'rgba(255,255,255,0.08)' :
+    status === 'COMPLETED' && !executing ? 'rgba(255,255,255,0.08)' :
     executing                            ? 'rgba(255,255,255,0.05)' :
     'transparent';
   const border =
-    status === 'completed' && !executing ? 'rgba(255,255,255,0.3)' :
+    status === 'COMPLETED' && !executing ? 'rgba(255,255,255,0.3)' :
     executing                            ? 'rgba(255,255,255,0.2)' :
     'rgba(255,255,255,0.1)';
   return (
@@ -93,7 +93,7 @@ function StatusBadge({ status, isExecuting }) {
       textTransform: 'uppercase', color, background: bg,
       border: `1px solid ${border}`, borderRadius: '2px',
     }} className={executing ? 'animate-pulse' : ''}>
-      {status.replace(/_/g, ' ')}
+      {status.toLowerCase().replace(/_/g, ' ')}
     </span>
   );
 }
@@ -116,7 +116,7 @@ export default function Conversation() {
   useEffect(() => {
     api.getConversation(id).then(data => {
       setConv(data);
-      if (data.status === 'executing') startStream();
+      if (data.status === 'EXECUTING') startStream();
     }).catch(() => navigate('/'));
   }, [id]);
 
@@ -142,7 +142,7 @@ export default function Conversation() {
           setStreamError('Execution timed out. The agents may still be running in the background.');
           break;
         }
-        if (evt.type === 'done' || (evt.type === 'conversation_status' && evt.status === 'completed')) {
+        if (evt.type === 'done' || (evt.type === 'conversation_status' && evt.status === 'COMPLETED')) {
           const updated = await api.getConversation(id);
           setConv(updated); setStreaming(false); streamGuard.current = false; return;
         }
@@ -159,7 +159,7 @@ export default function Conversation() {
     try {
       const updated = await api.sendMessage(id, message.trim());
       setMessage(''); setConv(updated);
-      if (updated.status === 'executing') startStream();
+      if (updated.status === 'EXECUTING') startStream();
     } catch (err) { console.error(err); }
     finally { setSending(false); }
   };
@@ -175,12 +175,12 @@ export default function Conversation() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
-  const isGathering = conv?.status === 'gathering_requirements';
-  const isReady     = conv?.status === 'ready_to_execute';
-  const isExecuting = conv?.status === 'executing' || streaming;
-  const isCompleted = conv?.status === 'completed' && !streaming;
-  const isRefining  = conv?.status === 'refining';
-  const isFailed    = conv?.status === 'failed';
+  const isGathering = conv?.status === 'GATHERING';
+  const isReady     = conv?.status === 'READY';
+  const isExecuting = conv?.status === 'EXECUTING' || streaming;
+  const isCompleted = conv?.status === 'COMPLETED' && !streaming;
+  const isRefining  = conv?.status === 'REFINING';
+  const isFailed    = conv?.status === 'FAILED';
 
   const getResult = () => {
     if (!conv?.messages) return null;
@@ -192,7 +192,7 @@ export default function Conversation() {
   const result = getResult();
 
   const statusText = conv
-    ? `Session ${id} — ${conv.mode} — ${conv.status.replace(/_/g, ' ')}`
+    ? `Session ${id} — ${conv.mode} — ${conv.status.toLowerCase().replace(/_/g, ' ')}`
     : `Session ${id} — Loading`;
 
   const inputPlaceholder =
@@ -369,7 +369,7 @@ export default function Conversation() {
                 setStreamError(null);
                 const updated = await api.getConversation(id).catch(() => null);
                 if (updated) setConv(updated);
-                if (updated?.status === 'executing') startStream();
+                if (updated?.status === 'EXECUTING') startStream();
               }}
             >
               Refresh
