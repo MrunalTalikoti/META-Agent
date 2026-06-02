@@ -16,7 +16,11 @@ anthropic>=0.40.0
 
 # Auth
 python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+# bcrypt is used DIRECTLY in app/core/security.py (bcrypt.hashpw / bcrypt.checkpw);
+# passlib's bcrypt backend is intentionally bypassed, so we pin bcrypt ourselves
+# rather than letting the passlib[bcrypt] extra pull an unbounded transitive copy.
+bcrypt>=4.0.0,<5.0.0
+passlib==1.7.4
 python-multipart==0.0.6
 
 # Config
