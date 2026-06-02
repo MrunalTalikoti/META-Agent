@@ -181,6 +181,28 @@ def _force_ready_with_fallback(conversation: Conversation) -> None:
     })
 
 
+async def _guarded(coro, conversation_id: int):
+    """
+    Wrap a background coroutine so an unhandled exception can never vanish
+    silently into a discarded ``asyncio.Task``.  On failure it logs and marks
+    the conversation COMPLETED with an error message, using its own session.
+    """
+    try:
+        await coro
+    except Exception as e:
+        logger.error("Background task failed conv=%d: %s", conversation_id, e, exc_info=True)
+        db = SessionLocal()
+        try:
+            conv = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+            if conv:
+                conv.status = ConversationStatus.COMPLETED
+                conv.messages.append({"role": "assistant", "content": f"Execution failed: {e}"})
+                flag_modified(conv, "messages")
+                db.commit()
+        finally:
+            db.close()
+
+
 async def _ask_gatherer(conversation: Conversation) -> None:
     """
     Run requirements gatherer using proper multi-turn history (run_with_history).
@@ -390,17 +412,20 @@ async def start_conversation(
 
     # ── NORMAL MODE: kick off background execution, return immediately ───────
     if mode == ExecutionMode.NORMAL:
+        # Idempotency: never launch a second executor for an already-running conv
+        if conversation.status == ConversationStatus.EXECUTING:
+            return conversation
         conversation.status = ConversationStatus.EXECUTING
         conversation.final_prompt = data.initial_message
         flag_modified(conversation, "messages")
         db.commit()
         db.refresh(conversation)
 
-        asyncio.create_task(_execute_in_background(
+        asyncio.create_task(_guarded(_execute_in_background(
             conversation_id=conversation.id,
             user_request=data.initial_message,
             project_id=data.project_id,
-        ))
+        ), conversation.id))
 
     # ── HARDCORE MODE: start gathering (fast — no orchestrator) ───────────────
     else:
@@ -440,17 +465,20 @@ async def send_message(
     # ── READY: decide between execute vs. modify ───────────────────────────────
     elif conversation.status == ConversationStatus.READY:
         if _is_confirmation(data.message):
+            # Idempotency: a duplicate "execute" must not start a second run
+            if conversation.status == ConversationStatus.EXECUTING:
+                return conversation
             check_rate_limit(current_user, db)
             conversation.status = ConversationStatus.EXECUTING
             flag_modified(conversation, "messages")
             db.commit()
             db.refresh(conversation)
 
-            asyncio.create_task(_execute_in_background(
+            asyncio.create_task(_guarded(_execute_in_background(
                 conversation_id=conversation.id,
                 user_request=conversation.final_prompt,
                 project_id=conversation.project_id,
-            ))
+            ), conversation.id))
 
         elif _is_modification(data.message):
             conversation.status = ConversationStatus.GATHERING
@@ -485,12 +513,12 @@ async def send_message(
         if not context:
             logger.warning("Conversation %d: no prior result found for refinement", conversation.id)
 
-        asyncio.create_task(_execute_in_background(
+        asyncio.create_task(_guarded(_execute_in_background(
             conversation_id=conversation.id,
             user_request=f"Refinement request: {data.message}",
             project_id=conversation.project_id,
             project_context=context,
-        ))
+        ), conversation.id))
 
     db.refresh(conversation)
     return conversation
