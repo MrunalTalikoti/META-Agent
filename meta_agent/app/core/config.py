@@ -33,7 +33,8 @@ class Settings(BaseSettings):
     # Security
     secret_key: str
     algorithm: str = "HS256"
-    access_token_expire_minutes: int = 1440
+    access_token_expire_minutes: int = 60          # short-lived access token
+    refresh_token_expire_minutes: int = 60 * 24 * 7  # 7-day refresh token
 
     @field_validator("secret_key")
     @classmethod

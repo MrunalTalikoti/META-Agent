@@ -1,5 +1,12 @@
 import { createContext, useContext, useState, useEffect } from 'react';
-import { api } from './api';
+import {
+  api,
+  getToken,
+  getRefreshToken,
+  setTokens,
+  clearTokens,
+  setAuthFailureHandler,
+} from './api';
 
 const AuthCtx = createContext(null);
 
@@ -7,10 +14,20 @@ export function AuthProvider({ children }) {
   const [user, setUser]       = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Validate stored token on boot and load full user profile
+  // When the api layer exhausts its refresh attempt, force a clean logout.
   useEffect(() => {
-    const token = localStorage.getItem('ma_token');
-    if (!token) { setLoading(false); return; }
+    setAuthFailureHandler(() => {
+      clearTokens();
+      setUser(null);
+    });
+    return () => setAuthFailureHandler(null);
+  }, []);
+
+  // Validate stored token on boot and load full user profile.
+  // getMetrics() now auto-refreshes a stale access token under the hood, so a
+  // returning user with a live refresh token stays logged in across reloads.
+  useEffect(() => {
+    if (!getToken()) { setLoading(false); return; }
     api.getMetrics()
       .then(m => setUser({
         id:             m.user_id,
@@ -18,16 +35,13 @@ export function AuthProvider({ children }) {
         email:          localStorage.getItem('ma_email') ?? '',
         requestsToday:  m.requests_today,
       }))
-      .catch(() => {
-        localStorage.removeItem('ma_token');
-        localStorage.removeItem('ma_email');
-      })
+      .catch(() => clearTokens())
       .finally(() => setLoading(false));
   }, []);
 
   const login = async (email, password) => {
     const data = await api.login(email, password);
-    localStorage.setItem('ma_token', data.access_token);
+    setTokens(data);
     localStorage.setItem('ma_email', email);
     // Fetch full profile immediately
     const m = await api.getMetrics().catch(() => null);
@@ -44,9 +58,11 @@ export function AuthProvider({ children }) {
     await login(email, password);
   };
 
-  const logout = () => {
-    localStorage.removeItem('ma_token');
-    localStorage.removeItem('ma_email');
+  const logout = async () => {
+    const refresh = getRefreshToken();
+    // Best-effort server-side revocation; never block local logout on it.
+    if (refresh) await api.logout(refresh).catch(() => {});
+    clearTokens();
     setUser(null);
   };
 

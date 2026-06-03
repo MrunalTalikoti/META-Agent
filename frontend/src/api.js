@@ -2,11 +2,60 @@
 // In production (Render), VITE_API_BASE_URL points to the backend service.
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
+const ACCESS_KEY  = 'ma_token';
+const REFRESH_KEY = 'ma_refresh';
+
 export function getToken() {
-  return localStorage.getItem('ma_token');
+  return localStorage.getItem(ACCESS_KEY);
 }
 
-async function req(path, opts = {}) {
+export function getRefreshToken() {
+  return localStorage.getItem(REFRESH_KEY);
+}
+
+// Persist a token pair returned by /token, /register or /refresh.
+export function setTokens({ access_token, refresh_token } = {}) {
+  if (access_token)  localStorage.setItem(ACCESS_KEY, access_token);
+  if (refresh_token) localStorage.setItem(REFRESH_KEY, refresh_token);
+}
+
+export function clearTokens() {
+  localStorage.removeItem(ACCESS_KEY);
+  localStorage.removeItem(REFRESH_KEY);
+  localStorage.removeItem('ma_email');
+}
+
+// AuthContext registers a callback here so the api layer can force a logout
+// when refreshing is no longer possible (refresh token expired/revoked).
+let onAuthFailure = null;
+export function setAuthFailureHandler(fn) { onAuthFailure = fn; }
+
+// Single-flight refresh: concurrent 401s share one in-flight refresh request
+// so we never fire N parallel /refresh calls (which rotation would reject).
+let refreshPromise = null;
+
+async function refreshAccessToken() {
+  const refresh_token = getRefreshToken();
+  if (!refresh_token) return false;
+
+  if (!refreshPromise) {
+    refreshPromise = fetch(BASE_URL + '/api/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token }),
+    })
+      .then(async (res) => {
+        if (!res.ok) return false;
+        setTokens(await res.json());
+        return true;
+      })
+      .catch(() => false)
+      .finally(() => { refreshPromise = null; });
+  }
+  return refreshPromise;
+}
+
+async function req(path, opts = {}, _retry = true) {
   const token = getToken();
   const headers = {
     ...(opts.json !== undefined ? { 'Content-Type': 'application/json' } : {}),
@@ -18,6 +67,15 @@ async function req(path, opts = {}) {
     headers,
     body: opts.json !== undefined ? JSON.stringify(opts.json) : opts.body,
   });
+
+  // Access token expired → transparently refresh once and replay the request.
+  if (res.status === 401 && _retry && getRefreshToken()) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) return req(path, opts, false);
+    clearTokens();
+    if (onAuthFailure) onAuthFailure();
+  }
+
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
@@ -41,6 +99,12 @@ export const api = {
     }
     return res.json();
   },
+
+  refresh: (refresh_token) =>
+    req('/api/auth/refresh', { method: 'POST', json: { refresh_token } }),
+
+  logout: (refresh_token) =>
+    req('/api/auth/logout', { method: 'POST', json: { refresh_token } }),
 
   // ── Projects ──────────────────────────────────────────
   getProjects: (page = 1, limit = 20) =>

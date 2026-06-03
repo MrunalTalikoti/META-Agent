@@ -4,7 +4,16 @@ from pydantic import BaseModel, EmailStr, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import hash_password, verify_password, create_access_token, get_current_user
+from app.core.security import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    create_refresh_token,
+    decode_refresh_token,
+    is_refresh_jti_active,
+    revoke_refresh_jti,
+    get_current_user,
+)
 from app.models.database import User
 from app.utils.logger import logger
 
@@ -27,7 +36,12 @@ class RegisterRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
 
 class UserResponse(BaseModel):
@@ -56,8 +70,11 @@ async def register(data: RegisterRequest, db: Session = Depends(get_db)):
     db.refresh(user)
 
     logger.info(f"New user registered: {user.email}")
-    token = create_access_token(user.id)
-    return {"access_token": token, "token_type": "bearer"}
+    return {
+        "access_token": create_access_token(user.id),
+        "refresh_token": create_refresh_token(user.id),
+        "token_type": "bearer",
+    }
 
 
 @router.post("/token", response_model=TokenResponse)
@@ -79,8 +96,61 @@ async def login(
         )
 
     logger.info(f"User logged in: {user.email}")
-    token = create_access_token(user.id)
-    return {"access_token": token, "token_type": "bearer"}
+    return {
+        "access_token": create_access_token(user.id),
+        "refresh_token": create_refresh_token(user.id),
+        "token_type": "bearer",
+    }
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(data: RefreshRequest, db: Session = Depends(get_db)):
+    """
+    Exchange a valid, non-revoked refresh token for a fresh access token.
+
+    Implements refresh-token rotation: the presented refresh token is revoked
+    and a brand-new one is issued alongside the access token. A stolen refresh
+    token therefore has a single-use window — replaying it after the legitimate
+    client has rotated will fail the JTI check.
+    """
+    invalid = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired refresh token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    payload = decode_refresh_token(data.refresh_token)
+    if not payload:
+        raise invalid
+
+    jti = payload["jti"]
+    user_id = int(payload["sub"])
+
+    if not is_refresh_jti_active(jti, user_id):
+        raise invalid
+
+    user = db.query(User).filter(User.id == user_id, User.is_active == 1).first()
+    if not user:
+        raise invalid
+
+    # Rotate: invalidate the old refresh token, issue a new pair.
+    revoke_refresh_jti(jti)
+
+    logger.info(f"Token refreshed for user: {user.email}")
+    return {
+        "access_token": create_access_token(user.id),
+        "refresh_token": create_refresh_token(user.id),
+        "token_type": "bearer",
+    }
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(data: RefreshRequest, current_user: User = Depends(get_current_user)):
+    """Server-side logout: revoke the caller's refresh token so it can't be reused."""
+    payload = decode_refresh_token(data.refresh_token)
+    if payload and int(payload["sub"]) == current_user.id:
+        revoke_refresh_jti(payload["jti"])
+    return None
 
 
 @router.get("/me", response_model=UserResponse)
