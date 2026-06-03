@@ -13,8 +13,7 @@ from app.services.job_manager import (
     JobStatus, create_job, get_job, update_status,
 )
 from app.utils.logger import logger
-from app.utils.rate_limiter import rate_limiter
-from app.utils.tier_limits import check_rate_limit
+from app.utils.dependencies import enforce_limits
 
 router = APIRouter()
 orchestrator = MetaAgentOrchestrator()
@@ -79,17 +78,17 @@ async def _run_orchestrator_job(
 @router.post("/execute")
 async def execute(
     data: ExecuteRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(enforce_limits),
     db: Session = Depends(get_db),
 ):
     """
     Submit an orchestrator job.  Returns immediately with a job_id.
 
     Poll /agents/jobs/{job_id} for status and results.
-    """
-    rate_limiter.enforce(str(current_user.id))
-    check_rate_limit(current_user, db)
 
+    Rate limiting (per-minute burst + daily tier quota) is applied by the
+    ``enforce_limits`` dependency — see app/utils/dependencies.py.
+    """
     project = db.query(Project).filter(
         Project.id == data.project_id,
         Project.user_id == current_user.id,

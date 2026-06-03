@@ -19,7 +19,7 @@ from app.models.database import (
 from app.agents.requirements_gatherer import RequirementsGathererAgent
 from app.core.orchestrator import MetaAgentOrchestrator
 from app.utils.logger import logger
-from app.utils.tier_limits import check_rate_limit
+from app.utils.dependencies import enforce_limits, apply_rate_limits
 
 router = APIRouter()
 gatherer = RequirementsGathererAgent()
@@ -387,11 +387,12 @@ async def _execute_in_background(
 @router.post("/", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
 async def start_conversation(
     data: ConversationCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(enforce_limits),
     db: Session = Depends(get_db),
 ):
-    check_rate_limit(current_user, db)
-
+    # Rate limiting (per-minute burst + daily tier quota) is applied by the
+    # enforce_limits dependency — every start launches a run (NORMAL → execute,
+    # HARDCORE → gatherer), so enforcement at the route level is correct here.
     project = db.query(Project).filter(
         Project.id == data.project_id,
         Project.user_id == current_user.id
@@ -489,7 +490,8 @@ async def send_message(
     # ── READY: decide between execute vs. modify ───────────────────────────────
     elif conversation.status == ConversationStatus.READY:
         if _is_confirmation(data.message):
-            check_rate_limit(current_user, db)
+            # Same enforcement as start_conversation / refinement / agents.execute.
+            apply_rate_limits(current_user, db)
             # Atomic READY→EXECUTING transition committed BEFORE launching the
             # background task. The conditional UPDATE only succeeds for the
             # single request that observes status=READY, so two concurrent
@@ -536,7 +538,8 @@ async def send_message(
 
     # ── COMPLETED: refinement in background ──────────────────────────────────
     elif conversation.status == ConversationStatus.COMPLETED:
-        check_rate_limit(current_user, db)
+        # Refinement launches a run — same enforcement as the execute path above.
+        apply_rate_limits(current_user, db)
         # Atomic COMPLETED→REFINING transition — same guard as execute: only the
         # request that flips the row launches the refinement run, so concurrent
         # refine requests cannot double-launch.
