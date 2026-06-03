@@ -113,7 +113,7 @@ async def get_user_metrics(
     executions = (
         db.query(
             func.sum(AgentExecution.total_tokens).label("total_tokens"),
-            func.sum(AgentExecution.estimated_cost_usd).label("total_cost_microdollars"),
+            func.sum(AgentExecution.estimated_cost_microdollars).label("total_cost_microdollars"),
             func.count(AgentExecution.id).label("total_llm_calls"),
         )
         .join(Task)

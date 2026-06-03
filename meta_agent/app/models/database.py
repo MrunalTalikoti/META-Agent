@@ -193,7 +193,8 @@ class AgentExecution(Base):
     prompt_tokens = Column(Integer, default=0)
     completion_tokens = Column(Integer, default=0)
     total_tokens = Column(Integer, default=0)
-    estimated_cost_usd = Column(BigInteger, default=0)   # stored as microdollars (x1,000,000)
+    # Cost is stored as microdollars (USD x 1,000,000) to keep it an exact integer.
+    estimated_cost_microdollars = Column(BigInteger, default=0)
 
     execution_time_ms = Column(Integer, default=0)
     success = Column(Integer, default=1)                 # 1=success, 0=failure
@@ -201,6 +202,11 @@ class AgentExecution(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     task = relationship("Task", back_populates="executions")
+
+    @property
+    def cost_usd(self) -> float:
+        """Stored microdollars expressed in dollars."""
+        return self.estimated_cost_microdollars / 1_000_000
 
     def __repr__(self):
         return f"<AgentExecution id={self.id} agent={self.agent_name} tokens={self.total_tokens}>"

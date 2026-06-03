@@ -481,4 +481,6 @@ eb0b779848e2  Add conversational modes
 f3a91c2d4e55  Add extended agent types
 a1b2c3d4e5f6  Widen estimated_cost_usd to BIGINT
 b2c3d4e5f6a7  Add gathering_turn_count and failed status
+c4d5e6f7a8b9  Align ConversationStatus FAILED casing
+d5e6f7a8b9c0  Rename estimated_cost_usd to estimated_cost_microdollars
 ```

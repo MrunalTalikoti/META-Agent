@@ -223,7 +223,7 @@ class BaseAgent(ABC):
                 prompt_tokens=llm_response.prompt_tokens if llm_response else 0,
                 completion_tokens=llm_response.completion_tokens if llm_response else 0,
                 total_tokens=llm_response.total_tokens if llm_response else 0,
-                estimated_cost_usd=int(llm_response.estimated_cost_usd() * 1_000_000) if llm_response else 0,
+                estimated_cost_microdollars=int(llm_response.estimated_cost_usd() * 1_000_000) if llm_response else 0,
                 execution_time_ms=execution_time_ms,
                 success=1 if success else 0,
             )
