@@ -1,6 +1,7 @@
 import json
 import re
 from app.agents.base_agent import BaseAgent
+from app.utils.prompt_safety import wrap_as_task, SECURITY_PREAMBLE
 
 
 class RequirementsGathererAgent(BaseAgent):
@@ -174,11 +175,13 @@ REMEMBER:
         ]
 
         if turns and turns[-1]["role"] == "user":
+            # Fence the untrusted user turn in <task>; the bracketed orchestration
+            # notes below stay OUTSIDE the wrapper as trusted instructions.
             last_user_content = turns[-1]["content"]
             turns[-1] = {
                 "role": "user",
                 "content": (
-                    f"{last_user_content}\n\n"
+                    f"{wrap_as_task(last_user_content)}\n\n"
                     f"[Current gathered_so_far: {json.dumps(gathered_so_far)}]\n"
                     f"[{continuation_note}]\n"
                     "Ask the next clarifying question for a missing field, "
@@ -197,7 +200,10 @@ REMEMBER:
                 )
             })
 
-        messages = [{"role": "system", "content": self.get_system_prompt()}, *turns]
+        messages = [
+            {"role": "system", "content": f"{self.get_system_prompt()}\n\n{SECURITY_PREAMBLE}"},
+            *turns,
+        ]
 
         try:
             llm_response = await llm.generate(messages)

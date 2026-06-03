@@ -14,6 +14,7 @@ from app.services.job_manager import (
 )
 from app.utils.logger import logger
 from app.utils.dependencies import enforce_limits
+from app.utils.prompt_safety import validate_user_text
 
 router = APIRouter()
 orchestrator = MetaAgentOrchestrator()
@@ -28,11 +29,8 @@ class ExecuteRequest(BaseModel):
     @field_validator("request")
     @classmethod
     def request_not_empty(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("Request cannot be empty")
-        if len(v) > 2000:
-            raise ValueError("Request too long (max 2000 characters)")
-        return v.strip()
+        # Strips, enforces the 2000-char cap, and rejects prompt-injection attempts.
+        return validate_user_text(v, "Request", max_chars=2000)
 
 
 class TaskStatusResponse(BaseModel):

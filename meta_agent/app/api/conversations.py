@@ -20,6 +20,7 @@ from app.agents.requirements_gatherer import RequirementsGathererAgent
 from app.core.orchestrator import MetaAgentOrchestrator
 from app.utils.logger import logger
 from app.utils.dependencies import enforce_limits, apply_rate_limits
+from app.utils.prompt_safety import validate_user_text
 
 router = APIRouter()
 gatherer = RequirementsGathererAgent()
@@ -63,11 +64,8 @@ class ConversationCreate(BaseModel):
     @field_validator("initial_message")
     @classmethod
     def validate_message(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("Message cannot be empty")
-        if len(v) > 5000:
-            raise ValueError("Message too long (max 5000 characters)")
-        return v.strip()
+        # Strips, enforces the length cap, and rejects prompt-injection attempts.
+        return validate_user_text(v, "Message")
 
 
 class MessageSend(BaseModel):
@@ -76,9 +74,9 @@ class MessageSend(BaseModel):
     @field_validator("message")
     @classmethod
     def validate_message(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("Message cannot be empty")
-        return v.strip()
+        # Same screening as ConversationCreate: length cap + injection rejection.
+        # (Previously this field had no length limit — now bounded for cost.)
+        return validate_user_text(v, "Message")
 
 
 class ConversationResponse(BaseModel):
