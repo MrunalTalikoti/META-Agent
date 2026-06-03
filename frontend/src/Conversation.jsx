@@ -154,7 +154,8 @@ export default function Conversation() {
   };
 
   const send = async () => {
-    if (!message.trim() || sending) return;
+    // Block sends while a run is active (mirrors the backend 409 guard).
+    if (!message.trim() || sending || isExecuting || isRefining) return;
     setSending(true);
     try {
       const updated = await api.sendMessage(id, message.trim());
@@ -334,7 +335,7 @@ export default function Conversation() {
                 value={message}
                 onChange={e => setMessage(e.target.value)}
                 onKeyDown={handleKey}
-                disabled={sending || isRefining}
+                disabled={sending || isRefining || isExecuting}
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '8px' }}>
@@ -345,7 +346,7 @@ export default function Conversation() {
               <button
                 className="tbtn"
                 onClick={send}
-                disabled={sending || !message.trim() || isRefining}
+                disabled={sending || !message.trim() || isRefining || isExecuting}
                 style={{ padding: '6px 20px' }}
               >
                 {sending ? 'Sending...' : 'Send'}

@@ -416,20 +416,29 @@ async def start_conversation(
 
     # ── NORMAL MODE: kick off background execution, return immediately ───────
     if mode == ExecutionMode.NORMAL:
-        # Idempotency: never launch a second executor for an already-running conv
-        if conversation.status == ConversationStatus.EXECUTING:
-            return conversation
-        conversation.status = ConversationStatus.EXECUTING
-        conversation.final_prompt = data.initial_message
-        flag_modified(conversation, "messages")
+        # Same guarded transition as send_message: atomically flip READY→EXECUTING
+        # and commit BEFORE launching the background task. The conversation was
+        # just created (no real contention here) but we keep the pattern uniform
+        # so the "only one launcher" invariant holds everywhere.
+        flipped = db.query(Conversation).filter(
+            Conversation.id == conversation.id,
+            Conversation.status == ConversationStatus.READY,
+        ).update(
+            {
+                Conversation.status: ConversationStatus.EXECUTING,
+                Conversation.final_prompt: data.initial_message,
+            },
+            synchronize_session=False,
+        )
         db.commit()
         db.refresh(conversation)
 
-        asyncio.create_task(_guarded(_execute_in_background(
-            conversation_id=conversation.id,
-            user_request=data.initial_message,
-            project_id=data.project_id,
-        ), conversation.id))
+        if flipped:
+            asyncio.create_task(_guarded(_execute_in_background(
+                conversation_id=conversation.id,
+                user_request=data.initial_message,
+                project_id=data.project_id,
+            ), conversation.id))
 
     # ── HARDCORE MODE: start gathering (fast — no orchestrator) ───────────────
     else:
@@ -455,6 +464,17 @@ async def send_message(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    # ── Reject any input while a run is already active ────────────────────────
+    # No new message (and therefore no new execution) is accepted while the
+    # conversation is mid-run. This is the first line of defence against
+    # duplicate runs; the atomic status transitions below close the remaining
+    # concurrent-confirmation race.
+    if conversation.status in (ConversationStatus.EXECUTING, ConversationStatus.REFINING):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A run is already in progress for this conversation; wait for it to finish.",
+        )
+
     conversation.messages.append({"role": "user", "content": data.message})
     flag_modified(conversation, "messages")
     db.commit()
@@ -469,14 +489,23 @@ async def send_message(
     # ── READY: decide between execute vs. modify ───────────────────────────────
     elif conversation.status == ConversationStatus.READY:
         if _is_confirmation(data.message):
-            # Idempotency: a duplicate "execute" must not start a second run
-            if conversation.status == ConversationStatus.EXECUTING:
-                return conversation
             check_rate_limit(current_user, db)
-            conversation.status = ConversationStatus.EXECUTING
-            flag_modified(conversation, "messages")
+            # Atomic READY→EXECUTING transition committed BEFORE launching the
+            # background task. The conditional UPDATE only succeeds for the
+            # single request that observes status=READY, so two concurrent
+            # "execute" confirmations cannot both launch the orchestrator.
+            flipped = db.query(Conversation).filter(
+                Conversation.id == conversation.id,
+                Conversation.status == ConversationStatus.READY,
+            ).update(
+                {Conversation.status: ConversationStatus.EXECUTING},
+                synchronize_session=False,
+            )
             db.commit()
             db.refresh(conversation)
+            if not flipped:
+                # Lost the race — another request already started execution.
+                return conversation
 
             asyncio.create_task(_guarded(_execute_in_background(
                 conversation_id=conversation.id,
@@ -508,9 +537,21 @@ async def send_message(
     # ── COMPLETED: refinement in background ──────────────────────────────────
     elif conversation.status == ConversationStatus.COMPLETED:
         check_rate_limit(current_user, db)
-        conversation.status = ConversationStatus.REFINING
+        # Atomic COMPLETED→REFINING transition — same guard as execute: only the
+        # request that flips the row launches the refinement run, so concurrent
+        # refine requests cannot double-launch.
+        flipped = db.query(Conversation).filter(
+            Conversation.id == conversation.id,
+            Conversation.status == ConversationStatus.COMPLETED,
+        ).update(
+            {Conversation.status: ConversationStatus.REFINING},
+            synchronize_session=False,
+        )
         db.commit()
         db.refresh(conversation)
+        if not flipped:
+            # Lost the race — another request already started refinement.
+            return conversation
 
         prior = _extract_prior_result(conversation)
         context = _build_refinement_context(prior) if prior else None
