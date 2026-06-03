@@ -60,6 +60,16 @@ class LLMProvider(ABC):
 # ── Mock Provider ─────────────────────────────────────────────────────────────
 
 class MockProvider(LLMProvider):
+    # Returned by the orchestrator's decomposition step (a task list, not a
+    # single artifact). Kept separate from the per-agent artifacts below.
+    DECOMPOSER_RESPONSE = '''[
+    {"id": 1, "description": "Design REST API endpoints", "agent": "api_designer", "dependencies": [], "inputs": {}},
+    {"id": 2, "description": "Design database schema", "agent": "database_schema", "dependencies": [], "inputs": {}},
+    {"id": 3, "description": "Generate implementation code", "agent": "code_generator", "dependencies": [1, 2], "inputs": {}},
+    {"id": 4, "description": "Write unit and integration tests", "agent": "testing_agent", "dependencies": [3], "inputs": {}},
+    {"id": 5, "description": "Create README and API documentation", "agent": "documentation_agent", "dependencies": [3], "inputs": {}}
+]'''
+
     MOCK_RESPONSES = {
         "code": '''```python
 def process_user_request(user_id: int, request: str) -> dict:
@@ -75,10 +85,170 @@ This function validates input, processes the request, and returns a structured d
 
         "database": '{"tables": [{"name": "users", "description": "Stores user accounts", "columns": [{"name": "id", "type": "SERIAL", "primary_key": true, "nullable": false}, {"name": "email", "type": "VARCHAR(255)", "unique": true, "nullable": false}, {"name": "created_at", "type": "TIMESTAMP", "nullable": true, "default": "NOW()"}], "indexes": [{"name": "idx_users_email", "columns": ["email"], "unique": true}]}], "relationships": [], "database_type": "PostgreSQL", "notes": "Standard user table"}',
 
-        "default": "I have analyzed your request and generated a comprehensive response following best practices.",
+        "testing": '''```python
+import pytest
+
+def test_create_user_valid_returns_201():
+    resp = create_user(email="a@b.com", password="secret123")
+    assert resp.status_code == 201
+
+def test_create_user_duplicate_email_returns_409():
+    create_user(email="a@b.com", password="secret123")
+    resp = create_user(email="a@b.com", password="secret123")
+    assert resp.status_code == 409
+
+def test_create_user_empty_email_raises():
+    with pytest.raises(ValueError):
+        create_user(email="", password="secret123")
+```''',
+
+        "documentation": '''# User Service
+
+A small service for creating and managing user accounts.
+
+## Overview
+This service exposes a REST API for registering users and looking them up.
+
+## Installation
+```bash
+pip install -r requirements.txt
+```
+
+## Usage
+Call the `/api/v1/users` endpoint with an email and password to create a user.
+
+## Troubleshooting
+If requests fail with 409, the email is already registered.''',
+
+        # Frontend: at least one component block (tsx) + a style block (css), so
+        # FrontendGeneratorAgent.parse_output extracts a non-empty component list.
+        "frontend": '''```tsx
+// UserList.tsx
+import React, { useState, useEffect } from 'react';
+
+interface User {
+  id: number;
+  name: string;
+}
+
+export default function UserList() {
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch('/api/v1/users')
+      .then((r) => r.json())
+      .then((data) => setUsers(data))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <p role="status">Loading…</p>;
+
+  return (
+    <ul aria-label="User list">
+      {users.map((u) => (
+        <li key={u.id}>{u.name}</li>
+      ))}
+    </ul>
+  );
+}
+```
+```css
+/* UserList.css */
+.user-list { display: flex; flex-direction: column; gap: 0.5rem; }
+```''',
+
+        # DevOps: one block per file, each classifiable by DevOpsAgent.parse_output
+        # (dockerfile / docker-compose yaml / GitHub Actions yaml / .env).
+        "devops": '''```dockerfile
+# Dockerfile
+FROM python:3.12-slim AS base
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+RUN useradd -m appuser
+USER appuser
+HEALTHCHECK CMD curl -f http://localhost:8000/health || exit 1
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+```yaml
+# docker-compose.yml
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+```
+```yaml
+# .github/workflows/ci.yml
+name: CI
+on:
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pytest
+```
+```env
+DATABASE_URL=postgresql://localhost/app
+SECRET_KEY=replace-me
+```''',
+
+        # Security / performance: raw JSON matching each agent's documented schema,
+        # so json.loads succeeds and the "unknown"/"raw" fallback is never hit.
+        "security": '''{"severity": "high", "issues": [{"type": "SQL Injection", "location": "app/api/users.py:42", "description": "User input is concatenated directly into a SQL query.", "fix": "Use parameterized queries: cursor.execute('SELECT * FROM users WHERE id = %s', (user_id,))"}, {"type": "Hardcoded Secret", "location": "app/core/config.py:12", "description": "An API key is committed in source control.", "fix": "Load secrets from environment variables instead."}], "recommendations": ["Enable rate limiting on authentication endpoints", "Add CSRF protection to state-changing routes"]}''',
+
+        "performance": '{"current_performance": "Average API response time is 850ms under load.", "bottlenecks": [{"location": "app/api/conversations.py:get_messages", "issue": "N+1 query loading messages per conversation", "impact": "high", "fix": "Use selectinload to eager-load messages in a single query."}], "optimizations": ["Add a Redis cache for hot conversation reads", "Add a composite index on (conversation_id, created_at)"]}',
 
         "requirements": '{"status": "needs_clarification", "question": "What backend framework would you like to use? (1) Python/FastAPI, (2) Python/Django, (3) Node.js/Express, (4) Go/Gin", "gathered_so_far": {"functional": "TBD", "tech_stack": "", "architecture": "", "scale": "", "deliverables": "", "constraints": ""}}',
+
+        # Legacy generic artifact. Routing no longer returns this — every known
+        # agent maps to a schema-correct artifact above (see _route).
+        "default": "I have analyzed your request and generated a comprehensive response following best practices.",
     }
+
+    # Distinctive phrase from each agent's system prompt → mock artifact key.
+    # The system prompt is authoritative (it is messages[0]); routing on it means
+    # an agent always gets schema-correct content regardless of task wording.
+    # Checked in order; first contained marker wins.
+    SYSTEM_ROUTES = [
+        ("requirements analyst", "requirements"),
+        ("api architect", "api"),
+        ("database architect", "database"),
+        ("qa engineer", "testing"),
+        ("technical writer", "documentation"),
+        ("frontend developer", "frontend"),
+        ("devops engineer", "devops"),
+        ("security expert", "security"),
+        ("performance optimization expert", "performance"),
+        ("senior software engineer", "code"),
+    ]
+
+    def _route(self, system_content: str, last_message: str) -> str:
+        """Pick the mock artifact for a request. Never returns the generic default."""
+        # 1. Orchestrator decomposition (special — returns a task list).
+        if "break down" in system_content or "available agents" in system_content:
+            return self.DECOMPOSER_RESPONSE
+
+        # 2. Agent fingerprint via system prompt (authoritative).
+        for marker, key in self.SYSTEM_ROUTES:
+            if marker in system_content:
+                return self.MOCK_RESPONSES[key]
+
+        # 3. Keyword fallback for bare user-only prompts (no system prompt).
+        if "api" in last_message or "endpoint" in last_message:
+            return self.MOCK_RESPONSES["api"]
+        if "database" in last_message or "schema" in last_message or "table" in last_message:
+            return self.MOCK_RESPONSES["database"]
+
+        # 4. Final default: a valid code artifact (not the prose "default").
+        return self.MOCK_RESPONSES["code"]
 
     async def generate(
         self,
@@ -88,28 +258,10 @@ This function validates input, processes the request, and returns a structured d
     ) -> LLMResponse:
         await asyncio.sleep(0.1)
 
-        system_content = next((m.get("content", "") for m in messages if m["role"] == "system"), "")
+        system_content = next((m.get("content", "") for m in messages if m["role"] == "system"), "").lower()
         last_message = messages[-1].get("content", "").lower()
 
-        is_decomposer = "break down" in system_content.lower() or "available agents" in system_content.lower()
-        is_gatherer = "requirements analyst" in system_content.lower()
-
-        if is_decomposer:
-            content = '''[
-    {"id": 1, "description": "Design REST API endpoints", "agent": "api_designer", "dependencies": [], "inputs": {}},
-    {"id": 2, "description": "Design database schema", "agent": "database_schema", "dependencies": [], "inputs": {}},
-    {"id": 3, "description": "Generate implementation code", "agent": "code_generator", "dependencies": [1, 2], "inputs": {}},
-    {"id": 4, "description": "Write unit and integration tests", "agent": "testing_agent", "dependencies": [3], "inputs": {}},
-    {"id": 5, "description": "Create README and API documentation", "agent": "documentation_agent", "dependencies": [3], "inputs": {}}
-]'''
-        elif is_gatherer:
-            content = self.MOCK_RESPONSES["requirements"]
-        elif "api" in last_message or "endpoint" in last_message:
-            content = self.MOCK_RESPONSES["api"]
-        elif "database" in last_message or "schema" in last_message or "table" in last_message:
-            content = self.MOCK_RESPONSES["database"]
-        else:
-            content = self.MOCK_RESPONSES["code"]
+        content = self._route(system_content, last_message)
 
         fake_prompt_tokens = sum(len(m.get("content", "")) for m in messages) // 4
         fake_completion_tokens = len(content) // 4

@@ -21,6 +21,10 @@ from app.agents.api_designer import APIDesignerAgent
 from app.agents.database_schema import DatabaseSchemaAgent
 from app.agents.testing_agent import TestingAgent
 from app.agents.documentation_agent import DocumentationAgent
+from app.agents.frontend_generator import FrontendGeneratorAgent
+from app.agents.devops_agent import DevOpsAgent
+from app.agents.security_auditor import SecurityAuditorAgent
+from app.agents.performance_optimizer import PerformanceOptimizerAgent
 from app.services.llm_service import LLMService, LLMResponse, MockProvider
 from app.utils.tier_limits import check_rate_limit
 from app.services.validation import SyntaxValidator, QualityChecker, ValidationOrchestrator
@@ -322,6 +326,160 @@ class TestAgentParsers:
         assert result["format"] == "markdown"
         assert result["code_examples"] == 1
         assert "My Project" in result["sections"]
+
+    # ── New agent categories: frontend / devops / security / performance ──────
+
+    def test_frontend_generator_extracts_components_and_styles(self):
+        agent = FrontendGeneratorAgent()
+        result = agent.parse_output(MockProvider.MOCK_RESPONSES["frontend"])
+        assert result["component_count"] >= 1
+        assert "warning" not in result
+        assert any("export default" in c for c in result["components"])
+        assert result["styles"]  # css block captured
+
+    def test_frontend_generator_no_components_warns(self):
+        agent = FrontendGeneratorAgent()
+        result = agent.parse_output("Just prose, no code blocks at all.")
+        assert result["component_count"] == 0
+        assert "warning" in result
+
+    def test_devops_agent_classifies_files(self):
+        agent = DevOpsAgent()
+        result = agent.parse_output(MockProvider.MOCK_RESPONSES["devops"])
+        assert result["file_count"] >= 1
+        assert "warning" not in result
+        assert "Dockerfile" in result["files"]
+        assert "docker-compose.yml" in result["files"]
+        assert ".github/workflows/ci.yml" in result["files"]
+        assert ".env.example" in result["files"]
+
+    def test_devops_agent_no_files_warns(self):
+        agent = DevOpsAgent()
+        result = agent.parse_output("No configuration here.")
+        assert result["file_count"] == 0
+        assert "warning" in result
+
+    def test_security_auditor_parses_json(self):
+        agent = SecurityAuditorAgent()
+        result = agent.parse_output(MockProvider.MOCK_RESPONSES["security"])
+        assert result["severity"] not in (None, "unknown")
+        assert "raw" not in result
+        assert len(result["issues"]) >= 1
+        assert all({"type", "location", "fix"} <= set(i) for i in result["issues"])
+
+    def test_security_auditor_invalid_json_falls_back(self):
+        agent = SecurityAuditorAgent()
+        result = agent.parse_output("not json")
+        assert result["severity"] == "unknown"  # documents the fallback shape
+
+    def test_performance_optimizer_parses_json(self):
+        agent = PerformanceOptimizerAgent()
+        result = agent.parse_output(MockProvider.MOCK_RESPONSES["performance"])
+        assert "raw" not in result
+        assert len(result["bottlenecks"]) >= 1
+        assert result["bottlenecks"][0]["impact"] in ("high", "medium", "low")
+        assert result["optimizations"]
+
+
+# ── Mock Provider routing ─────────────────────────────────────────────────────
+
+# Every agent in the registry, paired with a predicate that is True only when
+# parse_output() produced a real, schema-correct result (i.e. NOT a fallback).
+AGENT_SUCCESS_CHECKS = {
+    "code_generator":        lambda o: o.get("code") and "raw_output" not in o,
+    "api_designer":          lambda o: o.get("endpoint_count", 0) >= 1 and "error" not in o,
+    "database_schema":       lambda o: o.get("table_count", 0) >= 1 and "CREATE TABLE" in o.get("sql_ddl", ""),
+    "testing_agent":         lambda o: o.get("test_count", 0) >= 1 and "error" not in o,
+    "documentation_agent":   lambda o: o.get("format") == "markdown" and o.get("section_count", 0) >= 1,
+    "requirements_gatherer": lambda o: o.get("status") in ("needs_clarification", "ready"),
+    "frontend_generator":    lambda o: o.get("component_count", 0) >= 1 and "warning" not in o,
+    "devops":                lambda o: o.get("file_count", 0) >= 1 and "warning" not in o,
+    "security_auditor":      lambda o: o.get("severity") not in (None, "unknown") and "raw" not in o,
+    "performance_optimizer": lambda o: len(o.get("bottlenecks", [])) >= 1 and "raw" not in o,
+}
+
+
+class TestMockProviderRouting:
+    """The MockProvider must hand every agent schema-correct content."""
+
+    @pytest.mark.asyncio
+    async def test_routes_frontend_by_system_prompt(self):
+        provider = MockProvider()
+        messages = [
+            {"role": "system", "content": FrontendGeneratorAgent().get_system_prompt()},
+            {"role": "user", "content": "Build the dashboard"},  # no routing keywords
+        ]
+        content = (await provider.generate(messages)).content
+        assert "```tsx" in content
+
+    @pytest.mark.asyncio
+    async def test_routes_devops_by_system_prompt(self):
+        provider = MockProvider()
+        messages = [
+            {"role": "system", "content": DevOpsAgent().get_system_prompt()},
+            {"role": "user", "content": "Set up deployment"},
+        ]
+        content = (await provider.generate(messages)).content
+        assert "Dockerfile" in content and "docker-compose" in content
+
+    @pytest.mark.asyncio
+    async def test_routes_security_by_system_prompt(self):
+        provider = MockProvider()
+        messages = [
+            {"role": "system", "content": SecurityAuditorAgent().get_system_prompt()},
+            {"role": "user", "content": "Review the code"},
+        ]
+        data = json.loads((await provider.generate(messages)).content)
+        assert data["severity"] == "high" and data["issues"]
+
+    @pytest.mark.asyncio
+    async def test_routes_performance_by_system_prompt(self):
+        provider = MockProvider()
+        messages = [
+            {"role": "system", "content": PerformanceOptimizerAgent().get_system_prompt()},
+            {"role": "user", "content": "Make it faster"},
+        ]
+        data = json.loads((await provider.generate(messages)).content)
+        assert data["bottlenecks"]
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_beats_misleading_keywords(self):
+        """A frontend task whose description mentions 'api'/'database' must still
+        route by the frontend system prompt, not the keyword fallback."""
+        provider = MockProvider()
+        messages = [
+            {"role": "system", "content": FrontendGeneratorAgent().get_system_prompt()},
+            {"role": "user", "content": "Build a UI that calls the api and shows database tables"},
+        ]
+        content = (await provider.generate(messages)).content
+        assert "```tsx" in content  # frontend wins despite 'api'/'database' keywords
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("agent_name", list(AGENT_SUCCESS_CHECKS.keys()))
+    async def test_no_agent_falls_back_to_default(self, agent_name):
+        """Every registered agent must parse the MockProvider output into a real
+        result — never the generic 'default' / warning / raw fallback."""
+        from app.core.orchestrator import AGENT_REGISTRY
+
+        agent = AGENT_REGISTRY[agent_name]
+        messages = [
+            {"role": "system", "content": agent.get_system_prompt()},
+            {"role": "user", "content": "Build a user management feature"},
+        ]
+        response = await MockProvider().generate(messages)
+
+        # The generic prose default must never be what an agent receives.
+        assert response.content != MockProvider.MOCK_RESPONSES["default"]
+
+        output = agent.parse_output(response.content)
+        assert AGENT_SUCCESS_CHECKS[agent_name](output), (
+            f"{agent_name} fell back instead of parsing mock output: {output}"
+        )
+
+    def test_every_registry_agent_has_a_success_check(self):
+        """Guard: if a new agent is registered, this suite must cover it."""
+        from app.core.orchestrator import AGENT_REGISTRY
+        assert set(AGENT_REGISTRY) == set(AGENT_SUCCESS_CHECKS)
 
 
 # ── Syntax Validator ──────────────────────────────────────────────────────────
