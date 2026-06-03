@@ -21,6 +21,12 @@ AVAILABLE_AGENTS = {
     "requirements_gatherer": "Asks clarifying questions to gather complete project requirements",
 }
 
+# Hard safety cap on how many subtasks a single decomposition may contain.
+# The planner prompt asks for ≤8; this is a defensive ceiling against a
+# misbehaving LLM returning a huge list, and it bounds the work done by
+# persistence, validation, and the O(V+E) cycle check below.
+MAX_TASKS = 20
+
 
 class DecomposedTask:
     def __init__(self, id: int, description: str, agent: str, dependencies: list[int], inputs: dict):
@@ -117,6 +123,12 @@ OUTPUT FORMAT (JSON array only):
         ]
 
     def _validate_tasks(self, tasks: list[DecomposedTask]) -> None:
+        # Hard limit — reject oversized plans before doing any further work.
+        if len(tasks) > MAX_TASKS:
+            raise ValueError(
+                f"Too many tasks: {len(tasks)} exceeds the maximum of {MAX_TASKS}"
+            )
+
         task_ids = {t.id for t in tasks}
 
         for task in tasks:
@@ -136,21 +148,56 @@ OUTPUT FORMAT (JSON array only):
         logger.debug("Task decomposition validation passed")
 
     def _check_circular(self, tasks: list[DecomposedTask]) -> None:
-        graph = {t.id: set(t.dependencies) for t in tasks}
-        visited, in_stack = set(), set()
+        """Detect circular dependencies via iterative depth-first search.
 
-        def dfs(node):
-            visited.add(node)
-            in_stack.add(node)
-            for dep in graph.get(node, set()):
-                if dep not in visited:
-                    dfs(dep)
-                elif dep in in_stack:
+        Uses an explicit stack instead of recursion so traversal depth is bounded
+        only by available memory, never by Python's recursion limit. Behavior and
+        error reporting match the previous recursive implementation: nodes and
+        their dependencies are visited in the same order, so the first cycle found
+        — and the task id reported — are identical.
+
+        Three-color marking:
+            WHITE — not yet visited
+            GRAY  — on the current DFS path (its subtree is still being explored)
+            BLACK — fully explored
+        A dependency edge to a GRAY node is a back edge ⇒ a cycle.
+
+        Complexity: O(V + E) time, O(V) space (V = tasks, E = dependency edges).
+        """
+        graph = {t.id: list(t.dependencies) for t in tasks}
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color = {tid: WHITE for tid in graph}
+
+        for start in graph:
+            if color[start] != WHITE:
+                continue
+
+            # Each stack frame is (node, index of the next dependency to examine),
+            # which is exactly the state a recursive call would hold on the stack.
+            color[start] = GRAY
+            stack: list[tuple[int, int]] = [(start, 0)]
+
+            while stack:
+                node, i = stack[-1]
+                deps = graph.get(node, ())
+
+                if i == len(deps):
+                    # All dependencies explored — done with this node.
+                    color[node] = BLACK
+                    stack.pop()
+                    continue
+
+                # Advance this frame's cursor, then descend into the dependency.
+                stack[-1] = (node, i + 1)
+                dep = deps[i]
+                # Unknown ids can't be part of a cycle (and missing deps are already
+                # rejected by _validate_tasks); treat them as fully-explored leaves.
+                dep_color = color.get(dep, BLACK)
+
+                if dep_color == GRAY:
                     raise ValueError(
                         f"Circular dependency detected involving task {dep}"
                     )
-            in_stack.remove(node)
-
-        for task_id in graph:
-            if task_id not in visited:
-                dfs(task_id)
+                if dep_color == WHITE:
+                    color[dep] = GRAY
+                    stack.append((dep, 0))

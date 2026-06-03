@@ -14,7 +14,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.models.database import Base, User, Project, Task, TaskStatus, AgentType, UserTier
-from app.core.task_decomposer import TaskDecomposer, DecomposedTask, AVAILABLE_AGENTS
+from app.core.task_decomposer import TaskDecomposer, DecomposedTask, AVAILABLE_AGENTS, MAX_TASKS
 from app.core.orchestrator import MetaAgentOrchestrator, AGENT_REGISTRY
 from app.agents.code_generator import CodeGeneratorAgent
 from app.agents.api_designer import APIDesignerAgent
@@ -187,6 +187,63 @@ class TestTaskDecomposer:
         ]
         with pytest.raises(ValueError, match="[Cc]ircular"):
             decomposer._validate_tasks(tasks)
+
+    # ── Iterative cycle detection (explicit-stack DFS) ────────────────────────
+
+    @staticmethod
+    def _task(i, deps):
+        return DecomposedTask(i, f"task{i}", "code_generator", deps, {})
+
+    def test_validate_valid_dag_passes(self):
+        """A diamond DAG (1; 2→1; 3→1; 4→[2,3]) is acyclic and must pass."""
+        decomposer = TaskDecomposer.__new__(TaskDecomposer)
+        tasks = [
+            self._task(1, []),
+            self._task(2, [1]),
+            self._task(3, [1]),
+            self._task(4, [2, 3]),
+        ]
+        decomposer._validate_tasks(tasks)  # must not raise
+
+    def test_validate_self_loop_raises(self):
+        decomposer = TaskDecomposer.__new__(TaskDecomposer)
+        with pytest.raises(ValueError, match="[Cc]ircular.*task 1"):
+            decomposer._validate_tasks([self._task(1, [1])])
+
+    def test_validate_three_node_cycle_raises(self):
+        """1→2→3→1 — exercises the explicit stack beyond a single frame."""
+        decomposer = TaskDecomposer.__new__(TaskDecomposer)
+        tasks = [self._task(1, [2]), self._task(2, [3]), self._task(3, [1])]
+        with pytest.raises(ValueError, match="[Cc]ircular"):
+            decomposer._validate_tasks(tasks)
+
+    def test_check_circular_deep_chain_no_recursion_error(self):
+        """A 2000-node linear chain would overflow Python's recursion limit under
+        the old recursive DFS. The iterative version handles it (depth bounded by
+        memory, not the call stack). Calls _check_circular directly to bypass the
+        MAX_TASKS cap that _validate_tasks would otherwise apply first."""
+        decomposer = TaskDecomposer.__new__(TaskDecomposer)
+        chain = [self._task(1, [])] + [self._task(i, [i - 1]) for i in range(2, 2001)]
+        decomposer._check_circular(chain)  # must not raise (acyclic) or RecursionError
+
+    def test_check_circular_deep_chain_detects_cycle(self):
+        """Same deep chain, but closed into a cycle (1 depends on the last node)."""
+        decomposer = TaskDecomposer.__new__(TaskDecomposer)
+        chain = [self._task(1, [2000])] + [self._task(i, [i - 1]) for i in range(2, 2001)]
+        with pytest.raises(ValueError, match="[Cc]ircular"):
+            decomposer._check_circular(chain)
+
+    def test_validate_exceeds_max_tasks_raises(self):
+        decomposer = TaskDecomposer.__new__(TaskDecomposer)
+        tasks = [self._task(i, []) for i in range(1, MAX_TASKS + 2)]  # MAX_TASKS + 1
+        with pytest.raises(ValueError, match="[Tt]oo many tasks"):
+            decomposer._validate_tasks(tasks)
+
+    def test_validate_at_max_tasks_passes(self):
+        """Exactly MAX_TASKS valid tasks is allowed (boundary)."""
+        decomposer = TaskDecomposer.__new__(TaskDecomposer)
+        tasks = [self._task(i, []) for i in range(1, MAX_TASKS + 1)]
+        decomposer._validate_tasks(tasks)  # must not raise
 
     def test_all_registry_agents_in_available_agents(self):
         """Critical: every agent in AGENT_REGISTRY must be in AVAILABLE_AGENTS."""
